@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.venv/
+
+# uv
+uv.lock
+
+# VS Code
+.vscode/
+
+# Pytest
+.pytest_cache/
+
+# Mypy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Environment
+.env
+.env.*
+
+# Spark
+metastore_db/
+spark-warehouse/
+
+# Airflow
+airflow.db
+
+# dbt
+dbt_packages/
+target/
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
