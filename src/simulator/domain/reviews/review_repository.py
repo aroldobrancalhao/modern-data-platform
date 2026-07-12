@@ -35,6 +35,7 @@ class ReviewRepository:
                 )
                 ON CONFLICT (order_id, product_id)
                 DO NOTHING
+                RETURNING review_id
                 """,
                 (
                     review.review_id,

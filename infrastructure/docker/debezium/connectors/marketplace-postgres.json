@@ -1,0 +1,23 @@
+{
+  "name": "marketplace-postgres",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "postgres",
+    "database.password": "postgres",
+    "database.dbname": "mdp",
+    "topic.prefix": "marketplace",
+    "plugin.name": "pgoutput",
+    "slot.name": "marketplace_slot",
+    "publication.name": "marketplace_publication",
+    "publication.autocreate.mode": "filtered",
+    "schema.include.list": "marketplace",
+    "table.include.list": "marketplace.customers,marketplace.sellers,marketplace.categories,marketplace.products,marketplace.orders,marketplace.order_items,marketplace.order_status_history,marketplace.payments,marketplace.shipments,marketplace.reviews,marketplace.inventories",
+    "include.schema.changes": "false",
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "connect",
+    "tombstones.on.delete": "false"
+  }
+}
