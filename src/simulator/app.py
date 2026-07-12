@@ -1,12 +1,9 @@
-from simulator.domain.customer.service import CustomerService
+from simulator.scheduler import MarketplaceScheduler
 
 
 def main() -> None:
-    service = CustomerService()
-
-    customer = service.create_customer()
-
-    print(f"Customer created: {customer.customer_id}")
+    scheduler = MarketplaceScheduler()
+    scheduler.run()
 
 
 if __name__ == "__main__":
