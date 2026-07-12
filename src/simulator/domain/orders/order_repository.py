@@ -1,3 +1,6 @@
+from decimal import Decimal
+from uuid import UUID
+
 from psycopg import Connection
 
 from simulator.domain.orders.order_model import (
@@ -101,3 +104,38 @@ class OrderRepository:
                         history.changed_at,
                     ),
                 )
+
+
+
+    def get_random_order(
+        self,
+    ) -> tuple[UUID, UUID, UUID, Decimal] | None:
+
+        with self._connection.cursor() as cursor:
+
+            cursor.execute(
+                """
+                SELECT
+                    o.order_id,
+                    o.customer_id,
+                    oi.product_id,
+                    o.total_amount
+                FROM marketplace.orders o
+                INNER JOIN marketplace.order_items oi
+                    ON oi.order_id = o.order_id
+                ORDER BY random()
+                LIMIT 1
+                """
+            )
+
+            row = cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return (
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+        )
