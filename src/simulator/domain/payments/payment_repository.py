@@ -31,6 +31,7 @@ class PaymentRepository:
                 )
                 ON CONFLICT (code)
                 DO NOTHING
+                RETURNING payment_method_id
                 """,
                 (
                     payment_method.payment_method_id,
@@ -86,6 +87,7 @@ class PaymentRepository:
                 )
                 ON CONFLICT (order_id)
                 DO NOTHING
+                RETURNING payment_id
                 """,
                 (
                     payment.payment_id,

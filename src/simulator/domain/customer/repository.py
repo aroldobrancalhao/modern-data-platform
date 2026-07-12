@@ -28,6 +28,8 @@ class CustomerRepository:
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
+                ON CONFLICT DO NOTHING
+                RETURNING customer_id
                 """,
                 (
                     customer.customer_id,

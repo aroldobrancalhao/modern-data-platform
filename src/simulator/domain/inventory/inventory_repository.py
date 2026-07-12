@@ -27,6 +27,7 @@ class InventoryRepository:
                 )
                 ON CONFLICT (warehouse_id, product_id)
                 DO NOTHING
+                RETURNING inventory_id
                 """,
                 (
                     inventory.inventory_id,

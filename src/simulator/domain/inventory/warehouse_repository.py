@@ -31,6 +31,9 @@ class WarehouseRepository:
                 (
                     %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
+                ON CONFLICT (code)
+                DO NOTHING
+                RETURNING warehouse_id
                 """,
                 (
                     warehouse.warehouse_id,

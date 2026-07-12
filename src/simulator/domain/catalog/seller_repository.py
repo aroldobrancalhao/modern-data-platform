@@ -29,6 +29,9 @@ class SellerRepository:
                 (
                     %s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
+                 ON CONFLICT (document_number)
+                DO NOTHING
+                RETURNING seller_id
                 """,
                 (
                     seller.seller_id,
