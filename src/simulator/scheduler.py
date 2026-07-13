@@ -4,7 +4,7 @@ from simulator.core.settings import get_settings
 from simulator.domain.catalog.category_service import CategoryService
 from simulator.domain.catalog.product_service import ProductService
 from simulator.domain.catalog.seller_service import SellerService
-from simulator.domain.customer.service import CustomerService
+from simulator.domain.customer.customer_service import CustomerService
 from simulator.domain.inventory.inventory_service import InventoryService
 from simulator.domain.inventory.warehouse_service import WarehouseService
 from simulator.domain.logistics.shipment_service import ShipmentService
