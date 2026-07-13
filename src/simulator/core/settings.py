@@ -1,8 +1,10 @@
+from pathlib import Path
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings
 from pydantic_settings import SettingsConfigDict
 
+BASE_DIR = Path(__file__).resolve().parents[3]
 
 class Settings(BaseSettings):
     # PostgreSQL
@@ -46,7 +48,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BASE_DIR / ".env",
         case_sensitive=False,
     )
 

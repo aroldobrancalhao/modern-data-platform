@@ -3,21 +3,24 @@
   "config": {
     "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
     "tasks.max": "1",
-    "database.hostname": "postgres",
+    "database.hostname": "postgres-marketplace",
     "database.port": "5432",
     "database.user": "postgres",
     "database.password": "postgres",
-    "database.dbname": "mdp",
+    "database.dbname": "marketplace",
     "topic.prefix": "marketplace",
     "plugin.name": "pgoutput",
     "slot.name": "marketplace_slot",
     "publication.name": "marketplace_publication",
     "publication.autocreate.mode": "filtered",
     "schema.include.list": "marketplace",
-    "table.include.list": "marketplace.customers,marketplace.sellers,marketplace.categories,marketplace.products,marketplace.orders,marketplace.order_items,marketplace.order_status_history,marketplace.payments,marketplace.shipments,marketplace.reviews,marketplace.inventories",
+    "table.include.list": "marketplace.carriers,marketplace.categories,marketplace.customer_addresses,marketplace.customers,marketplace.inventories,marketplace.inventory_movements,marketplace.order_items,marketplace.order_status_history,marketplace.orders,marketplace.payment_methods,marketplace.payments,marketplace.products,marketplace.refunds,marketplace.reviews,marketplace.sellers,marketplace.shipments,marketplace.warehouses",
+    "snapshot.mode": "initial",
     "include.schema.changes": "false",
     "decimal.handling.mode": "double",
     "time.precision.mode": "connect",
-    "tombstones.on.delete": "false"
+    "tombstones.on.delete": "false",
+    "heartbeat.interval.ms": "10000",
+    "heartbeat.action.query": "SELECT 1"
   }
 }
