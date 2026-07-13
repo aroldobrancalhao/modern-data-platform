@@ -9,7 +9,7 @@ class SellerRepository:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def insert(self, seller: Seller) -> None:
+    def insert(self, seller: Seller) -> bool:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -29,7 +29,7 @@ class SellerRepository:
                 (
                     %s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
-                 ON CONFLICT (document_number)
+                ON CONFLICT
                 DO NOTHING
                 RETURNING seller_id
                 """,
@@ -46,7 +46,11 @@ class SellerRepository:
                 ),
             )
 
+            inserted = cursor.fetchone() is not None
+
         self._connection.commit()
+
+        return inserted
 
     def get_random_id(self) -> UUID | None:
         with self._connection.cursor() as cursor:

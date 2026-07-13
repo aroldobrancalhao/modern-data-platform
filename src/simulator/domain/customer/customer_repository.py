@@ -2,7 +2,7 @@ from uuid import UUID
 
 from psycopg import Connection
 
-from simulator.domain.customer.model import Customer
+from simulator.domain.customer.customer_model import Customer
 
 
 class CustomerRepository:
@@ -45,7 +45,11 @@ class CustomerRepository:
                 ),
             )
 
+            inserted = cursor.fetchone() is not None
+
         self._connection.commit()
+
+        return inserted
 
     def get_random_id(self) -> UUID | None:
         with self._connection.cursor() as cursor:

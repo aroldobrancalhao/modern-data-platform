@@ -1,6 +1,6 @@
 from faker import Faker
 
-from simulator.domain.customer.model import Customer
+from simulator.domain.customer.customer_model import Customer
 
 
 class CustomerGenerator:
