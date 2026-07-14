@@ -64,3 +64,4 @@ __pycache__/
 infrastructure/docker/logs/
 infrastructure/docker/plugins/
 infrastructure/docker/config/
+infrastructure/docker/airflow/logs/
