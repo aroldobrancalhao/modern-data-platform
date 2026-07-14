@@ -2,15 +2,26 @@
 
 ## Overview
 
-Modern Data Platform is an end-to-end Data Engineering platform designed to demonstrate how modern analytical platforms are built using cloud-native technologies.
+Modern Data Platform is an end-to-end Data Engineering platform designed to demonstrate how modern analytical platforms are built using cloud-native technologies and modern Lakehouse principles.
 
-The platform processes transactional data from operational systems and transforms it into analytical datasets that can be consumed by Business Intelligence tools.
+The platform simulates a complete production environment, starting from transactional systems and ending with analytical datasets consumed by Business Intelligence tools.
 
-The first implementation targets AWS, while the architecture is designed to support additional cloud providers in the future.
+The first implementation targets AWS while keeping the architecture cloud-agnostic, allowing the platform to be adapted to other cloud providers with minimal infrastructure changes.
+
+The project demonstrates practical knowledge of:
+
+- Data Engineering
+- Cloud Architecture
+- Event Streaming
+- Workflow Orchestration
+- Distributed Data Processing
+- Lakehouse Architecture
+- Data Modeling
+- Business Intelligence
 
 ---
 
-## Architecture Overview
+# Architecture Overview
 
 ```text
                     Transaction Simulator
@@ -31,7 +42,8 @@ The first implementation targets AWS, while the architecture is designed to supp
                       Amazon S3
                             │
                             ▼
-                 Databricks (PySpark)
+                        Databricks
+                (Workflows • Jobs • Clusters • PySpark)
                             │
                 Bronze → Silver → Gold
                             │
@@ -47,57 +59,341 @@ The first implementation targets AWS, while the architecture is designed to supp
 
 ---
 
-## Data Flow
+# Platform Responsibilities
 
-The platform follows the complete analytical data lifecycle.
+Each component has a single responsibility within the platform.
 
-1. A transaction is created by the simulator.
-2. The transaction is stored in PostgreSQL.
-3. Debezium captures database changes using Change Data Capture (CDC).
-4. Events are published to Apache Kafka.
-5. Airflow orchestrates batch workflows.
-6. Raw data is stored in Amazon S3.
-7. Databricks processes the data using PySpark.
-8. Data is transformed following the Medallion Architecture.
-9. dbt creates analytical models using Star Schema.
-10. Athena exposes the datasets for querying.
-11. Power BI consumes the analytical data.
+| Component | Responsibility |
+|-----------|----------------|
+| Transaction Simulator | Generates realistic marketplace transactions |
+| PostgreSQL | Transactional OLTP database |
+| Debezium | Change Data Capture (CDC) |
+| Apache Kafka | Event Streaming Platform |
+| Apache Airflow | Workflow orchestration and pipeline control |
+| Amazon S3 | Data Lake storage |
+| Databricks | Distributed processing with PySpark |
+| dbt Core | Analytical modeling |
+| Amazon Athena | SQL query engine |
+| Power BI | Business Intelligence |
+
+Each component performs only the responsibilities for which it was designed.
 
 ---
 
-## Architecture Principles
+# Cloud Abstraction
 
-The platform is based on the following principles:
+The platform is designed to be cloud-agnostic.
 
-- Cloud-agnostic design
+Business logic never depends directly on a cloud provider.
+
+Only the infrastructure layer changes between providers.
+
+| Layer | AWS | Azure | Google Cloud |
+|--------|-----|--------|--------------|
+| Object Storage | Amazon S3 | Azure Data Lake Storage Gen2 | Google Cloud Storage |
+| Spark Platform | Databricks on AWS | Databricks on Azure | Databricks on GCP |
+| SQL Engine | Amazon Athena | Synapse Analytics | BigQuery |
+
+Processing logic remains exactly the same regardless of the cloud provider.
+
+---
+
+# Data Flow
+
+The platform follows the complete analytical data lifecycle.
+
+## 1. Transaction Generation
+
+The simulator generates realistic marketplace events.
+
+Examples include:
+
+- Customers
+- Customer Addresses
+- Sellers
+- Products
+- Warehouses
+- Inventory
+- Inventory Movements
+- Orders
+- Order Items
+- Payments
+- Shipments
+- Reviews
+
+The simulator represents an operational OLTP application.
+
+---
+
+## 2. Transaction Storage
+
+Transactions are persisted in PostgreSQL.
+
+PostgreSQL is the transactional source of truth.
+
+No analytical processing occurs at this stage.
+
+---
+
+## 3. Change Data Capture
+
+Debezium continuously monitors PostgreSQL through Logical Replication.
+
+Every INSERT, UPDATE and DELETE operation generates an event.
+
+No polling mechanism is required.
+
+---
+
+## 4. Event Streaming
+
+Debezium publishes every database event into Kafka.
+
+Each table is mapped to its own Kafka topic.
+
+Example:
+
+```text
+marketplace.customers
+marketplace.orders
+marketplace.products
+marketplace.inventory_movements
+```
+
+Kafka becomes the immutable event bus of the platform.
+
+---
+
+# Airflow Responsibilities
+
+Apache Airflow is responsible for orchestrating the platform.
+
+Airflow **does not perform data transformations**.
+
+Its responsibilities include:
+
+- Scheduling workflows
+- Managing task dependencies
+- Retry policies
+- SLA monitoring
+- Pipeline execution
+- Triggering Databricks Jobs
+- Branching workflows
+- Failure notifications
+- Monitoring pipeline execution
+
+Airflow is the orchestration layer of the platform.
+
+---
+
+# Amazon S3 Responsibilities
+
+Amazon S3 is the platform Data Lake.
+
+It stores every processing layer generated by Databricks.
+
+Typical layout:
+
+```text
+s3://modern-data-platform/
+
+bronze/
+silver/
+gold/
+```
+
+Amazon S3 is responsible only for storage.
+
+It never executes transformations.
+
+---
+
+# Databricks Responsibilities
+
+Databricks is the distributed processing engine of the platform.
+
+It reads raw data from Amazon S3 and executes all transformations using PySpark.
+
+Responsibilities include:
+
+- Bronze ingestion
+- Silver transformations
+- Gold aggregations
+- Incremental processing
+- Schema evolution
+- Data quality
+- Partitioning
+- Performance optimization
+
+All processing logic is implemented in Databricks.
+
+No business logic is implemented inside Airflow.
+
+---
+
+# Medallion Architecture
+
+The platform follows the Medallion Architecture.
+
+## Bronze
+
+Raw immutable data.
+
+Characteristics:
+
+- Original data
+- Historical preservation
+- Append-only
+- No business rules
+
+---
+
+## Silver
+
+Clean and standardized data.
+
+Characteristics:
+
+- Data quality
+- Deduplication
+- Type normalization
+- Incremental processing
+- Business validation
+
+---
+
+## Gold
+
+Business-ready analytical datasets.
+
+Characteristics:
+
+- Facts
+- Dimensions
+- KPIs
+- Aggregations
+- Analytical datasets
+
+---
+
+# Processing Modes
+
+The platform supports two execution models.
+
+## Batch Processing
+
+Airflow orchestrates Databricks Jobs executed on a schedule.
+
+```text
+Kafka
+        │
+        ▼
+Airflow
+        │
+        ▼
+Databricks Job
+        │
+        ▼
+Amazon S3
+        │
+        ▼
+Bronze → Silver → Gold
+```
+
+This is the default execution model.
+
+---
+
+## Streaming Processing
+
+Databricks Structured Streaming continuously consumes Kafka topics.
+
+```text
+Kafka
+        │
+        ▼
+Databricks Structured Streaming
+        │
+        ▼
+Amazon S3
+        │
+        ▼
+Bronze → Silver → Gold
+```
+
+This mode provides near real-time processing.
+
+Whenever possible, Batch and Streaming pipelines share the same transformation logic.
+
+---
+
+# dbt Responsibilities
+
+dbt is responsible exclusively for analytical modeling.
+
+Responsibilities include:
+
+- Star Schema
+- Facts
+- Dimensions
+- Metrics
+- Documentation
+- Data Tests
+
+dbt never performs ingestion.
+
+---
+
+# Amazon Athena Responsibilities
+
+Amazon Athena provides SQL access over the Gold layer stored in Amazon S3.
+
+No transformations occur in Athena.
+
+Athena exposes curated datasets for analytical consumption.
+
+---
+
+# Power BI Responsibilities
+
+Power BI is the presentation layer.
+
+Dashboards consume only curated analytical datasets exposed by Athena.
+
+Power BI never accesses transactional data directly.
+
+---
+
+# Design Principles
+
+The platform follows these architectural principles:
+
+- Cloud-agnostic architecture
 - Event-driven architecture
 - Lakehouse architecture
 - Medallion architecture
 - ELT pipelines
+- Separation of responsibilities
 - Infrastructure as Code
-- Data Quality
+- Distributed processing
+- Incremental processing
 - Observability
+- Data Quality
+- Scalability
 
 ---
 
-## Main Components
+# Current Implementation Status
 
-| Component | Responsibility |
-|-----------|----------------|
-| PostgreSQL | Transactional database |
-| Debezium | Change Data Capture |
-| Kafka | Event streaming |
-| Airflow | Workflow orchestration |
-| Amazon S3 | Data Lake storage |
-| Databricks | Distributed data processing |
-| dbt | Analytical transformations |
-| Athena | SQL query engine |
-| Power BI | Business Intelligence |
-
----
-
-## Current Status
-
-The platform is under active development.
-
-Each component will be implemented incrementally while maintaining a working and documented architecture.
+| Component | Status |
+|-----------|--------|
+| Transaction Simulator | ✅ Completed |
+| PostgreSQL | ✅ Completed |
+| Debezium CDC | ✅ Completed |
+| Apache Kafka | ✅ Completed |
+| Apache Airflow | 🚧 Planned |
+| Amazon S3 | 🚧 Planned |
+| Databricks | 🚧 Planned |
+| dbt Core | 🚧 Planned |
+| Amazon Athena | 🚧 Planned |
+| Power BI | 🚧 Planned |
