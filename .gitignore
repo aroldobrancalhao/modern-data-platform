@@ -1,67 +1,114 @@
+# ==========================
 # Python
+# ==========================
+
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.egg-info/
 .python-version
-.venv/
 
-# uv
+.venv/
+.venv-airflow/
+
+# ==========================
+# Package Managers
+# ==========================
+
 uv.lock
 
-# VS Code
+# ==========================
+# IDE
+# ==========================
+
 .vscode/
 
-# Pytest
+# ==========================
+# Testing
+# ==========================
+
 .pytest_cache/
-
-# Mypy
 .mypy_cache/
-
-# Ruff
 .ruff_cache/
 
-# Coverage
 .coverage
 htmlcov/
 
+# ==========================
 # Logs
+# ==========================
+
 *.log
 
+# ==========================
 # OS
+# ==========================
+
 .DS_Store
 Thumbs.db
 
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-
+# ==========================
 # Environment
+# ==========================
+
 .env
 .env.*
 
+# ==========================
+# Terraform
+# ==========================
+
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# ==========================
 # Spark
+# ==========================
+
 metastore_db/
 spark-warehouse/
 
+# ==========================
 # Airflow
+# ==========================
+
 airflow.db
 
+infrastructure/docker/config/airflow.cfg
+infrastructure/docker/airflow/logs/
+infrastructure/docker/airflow/plugins/__pycache__/
+
+# ==========================
 # dbt
+# ==========================
+
 dbt_packages/
 target/
 logs/
 
+# ==========================
 # Jupyter
+# ==========================
+
 .ipynb_checkpoints/
 
-*.egg-info/
-__pycache__/
-.pytest_cache/
+# ==========================
+# Terraform
+# ==========================
 
-# Airflow
-infrastructure/docker/logs/
-infrastructure/docker/plugins/
-infrastructure/docker/config/
-infrastructure/docker/airflow/logs/
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform Lock
+!.terraform.lock.hcl
