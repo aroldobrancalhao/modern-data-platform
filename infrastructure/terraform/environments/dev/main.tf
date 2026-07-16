@@ -192,3 +192,182 @@ module "cloudwatch_terraform" {
 
   tags = local.default_tags
 }
+
+##########################################################
+# Glue Policy Document
+##########################################################
+
+data "aws_iam_policy_document" "glue" {
+
+  statement {
+
+    sid = "GlueDataLakeAccess"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      module.datalake.bucket_arn
+    ]
+  }
+
+  statement {
+
+    sid = "GlueObjects"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject"
+    ]
+
+    resources = [
+      "${module.datalake.bucket_arn}/*"
+    ]
+  }
+
+  statement {
+
+    sid = "GlueCatalog"
+
+    effect = "Allow"
+
+    actions = [
+      "glue:*"
+    ]
+
+    resources = [
+      "*"
+    ]
+  }
+
+  statement {
+
+    sid = "CloudWatchLogs"
+
+    effect = "Allow"
+
+    actions = [
+      "logs:*"
+    ]
+
+    resources = [
+      "*"
+    ]
+  }
+}
+
+module "glue_policy" {
+
+  source = "../../modules/iam-policy"
+
+  name = "mdp-glue-policy-dev"
+
+  description = "Glue permissions."
+
+  policy = data.aws_iam_policy_document.glue.json
+
+  tags = local.default_tags
+}
+
+##########################################################
+# Glue Assume Role
+##########################################################
+
+data "aws_iam_policy_document" "glue_assume_role" {
+
+  statement {
+
+    effect = "Allow"
+
+    principals {
+
+      type = "Service"
+
+      identifiers = [
+        "glue.amazonaws.com"
+      ]
+    }
+
+    actions = [
+      "sts:AssumeRole"
+    ]
+  }
+}
+
+module "glue_role" {
+
+  source = "../../modules/iam-role"
+
+  name = "mdp-glue-role-dev"
+
+  assume_role_policy = data.aws_iam_policy_document.glue_assume_role.json
+
+  tags = local.default_tags
+}
+
+module "glue_attachment" {
+
+  source = "../../modules/iam-attachment"
+
+  role_name = module.glue_role.name
+
+  policy_arn = module.glue_policy.arn
+}
+
+module "glue_bronze" {
+
+  source = "../../modules/glue"
+
+  database_name = "mdp_bronze_dev"
+
+  crawler_name = "mdp-bronze-crawler-dev"
+
+  crawler_role_arn = module.glue_role.arn
+
+  bucket_name = module.datalake.bucket_name
+
+  crawler_path = "bronze/"
+
+  tags = local.default_tags
+}
+
+module "glue_silver" {
+
+  source = "../../modules/glue"
+
+  database_name = "mdp_silver_dev"
+
+  crawler_name = "mdp-silver-crawler-dev"
+
+  crawler_role_arn = module.glue_role.arn
+
+  bucket_name = module.datalake.bucket_name
+
+  crawler_path = "silver/"
+
+  tags = local.default_tags
+}
+
+module "glue_gold" {
+
+  source = "../../modules/glue"
+
+  database_name = "mdp_gold_dev"
+
+  crawler_name = "mdp-gold-crawler-dev"
+
+  crawler_role_arn = module.glue_role.arn
+
+  bucket_name = module.datalake.bucket_name
+
+  crawler_path = "gold/"
+
+  tags = local.default_tags
+}
+
