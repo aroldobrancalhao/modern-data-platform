@@ -138,3 +138,57 @@ module "databricks_attachment" {
 
   policy_arn = module.datalake_policy.arn
 }
+
+module "cloudwatch_airflow" {
+  source = "../../modules/cloudwatch"
+
+  log_group_name    = "/${var.project_name}/${var.environment}/airflow"
+  retention_in_days = 30
+
+  tags = local.default_tags
+}
+
+module "cloudwatch_glue" {
+  source = "../../modules/cloudwatch"
+
+  log_group_name    = "/${var.project_name}/${var.environment}/glue"
+  retention_in_days = 30
+
+  tags = local.default_tags
+}
+
+module "cloudwatch_databricks" {
+  source = "../../modules/cloudwatch"
+
+  log_group_name    = "/${var.project_name}/${var.environment}/databricks"
+  retention_in_days = 30
+
+  tags = local.default_tags
+}
+
+module "cloudwatch_athena" {
+  source = "../../modules/cloudwatch"
+
+  log_group_name    = "/${var.project_name}/${var.environment}/athena"
+  retention_in_days = 30
+
+  tags = local.default_tags
+}
+
+module "cloudwatch_platform" {
+  source = "../../modules/cloudwatch"
+
+  log_group_name    = "/${var.project_name}/${var.environment}/platform"
+  retention_in_days = 30
+
+  tags = local.default_tags
+}
+
+module "cloudwatch_terraform" {
+  source = "../../modules/cloudwatch"
+
+  log_group_name    = "/${var.project_name}/${var.environment}/terraform"
+  retention_in_days = 30
+
+  tags = local.default_tags
+}
