@@ -1,0 +1,23 @@
+bundle:
+  name: modern-data-platform
+
+include:
+  - variables.yml
+  - "*_job.yml"
+  - full_pipeline.yml
+
+sync:
+  paths:
+    - ../../notebooks
+    - ../../src
+
+targets:
+  dev:
+    default: true
+
+    workspace:
+      host: https://dbc-482c0db5-7f8e.cloud.databricks.com
+
+  prod:
+    workspace:
+      host: https://dbc-482c0db5-7f8e.cloud.databricks.com

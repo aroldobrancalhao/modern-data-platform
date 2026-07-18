@@ -1,0 +1,13 @@
+resources:
+  jobs:
+    gold:
+      name: Gold Pipeline
+
+      tasks:
+        - task_key: gold
+
+          notebook_task:
+            notebook_path: ../../notebooks/gold/publish_gold.ipynb
+
+            base_parameters:
+              entity: customers

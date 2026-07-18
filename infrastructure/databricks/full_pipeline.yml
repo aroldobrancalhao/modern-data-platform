@@ -1,0 +1,26 @@
+resources:
+  jobs:
+    full_pipeline:
+      name: Full Pipeline
+
+      tasks:
+        - task_key: bronze
+
+          run_job_task:
+            job_id: ${resources.jobs.bronze.id}
+
+        - task_key: silver
+
+          depends_on:
+            - task_key: bronze
+
+          run_job_task:
+            job_id: ${resources.jobs.silver.id}
+
+        - task_key: gold
+
+          depends_on:
+            - task_key: silver
+
+          run_job_task:
+            job_id: ${resources.jobs.gold.id}

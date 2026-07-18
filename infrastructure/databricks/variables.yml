@@ -1,0 +1,12 @@
+variables:
+  catalog:
+    description: Unity Catalog
+    default: workspace
+
+  schema:
+    description: Database Schema
+    default: marketplace
+
+  environment:
+    description: Environment
+    default: dev
