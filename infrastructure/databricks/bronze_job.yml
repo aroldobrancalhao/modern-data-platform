@@ -1,0 +1,13 @@
+resources:
+  jobs:
+    bronze:
+      name: Bronze Pipeline
+
+      tasks:
+        - task_key: bronze
+
+          notebook_task:
+            notebook_path: ../../notebooks/bronze/ingest_sources.ipynb
+
+            base_parameters:
+              entity: customers

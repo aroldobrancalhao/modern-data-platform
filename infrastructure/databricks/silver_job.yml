@@ -1,0 +1,13 @@
+resources:
+  jobs:
+    silver:
+      name: Silver Pipeline
+
+      tasks:
+        - task_key: silver
+
+          notebook_task:
+            notebook_path: ../../notebooks/silver/transform_silver.ipynb
+
+            base_parameters:
+              entity: customers
