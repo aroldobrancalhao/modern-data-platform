@@ -1,6 +1,12 @@
 bundle:
   name: modern-data-platform
 
+artifacts:
+  default:
+    type: whl
+    build: uv build --wheel
+    path: ../..
+    
 include:
   - variables.yml
   - "*_job.yml"
