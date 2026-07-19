@@ -1,5 +1,5 @@
 module "naming" {
-  source = "../../modules/naming"
+  source = "../../modules/foundation/naming"
 
   project_name  = var.project_name
   resource_name = "datalake"
@@ -8,7 +8,7 @@ module "naming" {
 }
 
 module "datalake" {
-  source = "../../modules/s3"
+  source = "../../modules/storage/datalake"
 
   bucket_name = module.naming.bucket_name
 
@@ -140,7 +140,7 @@ module "databricks_attachment" {
 }
 
 module "cloudwatch_airflow" {
-  source = "../../modules/cloudwatch"
+  source = "../../modules/monitoring/cloudwatch"
 
   log_group_name    = "/${var.project_name}/${var.environment}/airflow"
   retention_in_days = 30
@@ -149,7 +149,7 @@ module "cloudwatch_airflow" {
 }
 
 module "cloudwatch_glue" {
-  source = "../../modules/cloudwatch"
+  source = "../../modules/monitoring/cloudwatch"
 
   log_group_name    = "/${var.project_name}/${var.environment}/glue"
   retention_in_days = 30
@@ -158,7 +158,7 @@ module "cloudwatch_glue" {
 }
 
 module "cloudwatch_databricks" {
-  source = "../../modules/cloudwatch"
+  source = "../../modules/monitoring/cloudwatch"
 
   log_group_name    = "/${var.project_name}/${var.environment}/databricks"
   retention_in_days = 30
@@ -167,7 +167,7 @@ module "cloudwatch_databricks" {
 }
 
 module "cloudwatch_athena" {
-  source = "../../modules/cloudwatch"
+  source = "../../modules/monitoring/cloudwatch"
 
   log_group_name    = "/${var.project_name}/${var.environment}/athena"
   retention_in_days = 30
@@ -176,7 +176,7 @@ module "cloudwatch_athena" {
 }
 
 module "cloudwatch_platform" {
-  source = "../../modules/cloudwatch"
+  source = "../../modules/monitoring/cloudwatch"
 
   log_group_name    = "/${var.project_name}/${var.environment}/platform"
   retention_in_days = 30
@@ -185,7 +185,7 @@ module "cloudwatch_platform" {
 }
 
 module "cloudwatch_terraform" {
-  source = "../../modules/cloudwatch"
+  source = "../../modules/monitoring/cloudwatch"
 
   log_group_name    = "/${var.project_name}/${var.environment}/terraform"
   retention_in_days = 30
@@ -322,7 +322,7 @@ module "glue_attachment" {
 
 module "glue_bronze" {
 
-  source = "../../modules/glue"
+  source = "../../modules/catalog/glue"
 
   database_name = "mdp_bronze_dev"
 
@@ -339,7 +339,7 @@ module "glue_bronze" {
 
 module "glue_silver" {
 
-  source = "../../modules/glue"
+  source = "../../modules/catalog/glue"
 
   database_name = "mdp_silver_dev"
 
@@ -356,7 +356,7 @@ module "glue_silver" {
 
 module "glue_gold" {
 
-  source = "../../modules/glue"
+  source = "../../modules/catalog/glue"
 
   database_name = "mdp_gold_dev"
 
@@ -377,7 +377,7 @@ module "glue_gold" {
 
 module "athena" {
 
-  source = "../../modules/athena"
+  source = "../../modules/analytics/athena"
 
   workgroup_name = "mdp-athena-dev"
 
