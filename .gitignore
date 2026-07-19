@@ -55,14 +55,6 @@ Thumbs.db
 .env
 .env.*
 
-# ==========================
-# Terraform
-# ==========================
-
-.terraform/
-*.tfstate
-*.tfstate.*
-.terraform.lock.hcl
 
 # ==========================
 # Spark
@@ -95,19 +87,39 @@ logs/
 
 .ipynb_checkpoints/
 
-# ==========================
+####################################################
 # Terraform
-# ==========================
+####################################################
 
-**/.terraform/*
+**/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
+*.tfvars.json
 *.tfplan
+
 crash.log
+
 override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
 
 !.terraform.lock.hcl
+
+
+# Build
+build/
+dist/
+
+# Archives
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+
+
+*.egg
+.eggs/
+pip-wheel-metadata/
