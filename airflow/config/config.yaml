@@ -1,0 +1,10 @@
+environment: dev
+
+logging:
+  level: INFO
+
+scheduler:
+  enabled: true
+
+features:
+  load_examples: false

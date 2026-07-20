@@ -1,0 +1,32 @@
+[
+    {
+        "name": "default_pool",
+        "slots": 128,
+        "description": "Default pool",
+        "include_deferred": false
+    },
+    {
+        "name": "ingestion",
+        "slots": 16,
+        "description": "Data ingestion",
+        "include_deferred": false
+    },
+    {
+        "name": "transformation",
+        "slots": 16,
+        "description": "Data transformation",
+        "include_deferred": false
+    },
+    {
+        "name": "catalog",
+        "slots": 8,
+        "description": "Glue crawlers",
+        "include_deferred": false
+    },
+    {
+        "name": "quality",
+        "slots": 8,
+        "description": "Data quality",
+        "include_deferred": false
+    }
+]

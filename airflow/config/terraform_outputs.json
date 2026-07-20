@@ -1,0 +1,37 @@
+{
+  "athena_workgroup": {
+    "sensitive": false,
+    "type": "string",
+    "value": "mdp-athena-dev"
+  },
+  "aws_region": {
+    "sensitive": false,
+    "type": "string",
+    "value": "sa-east-1"
+  },
+  "bronze_database": {
+    "sensitive": false,
+    "type": "string",
+    "value": "mdp_bronze_dev"
+  },
+  "datalake_bucket": {
+    "sensitive": false,
+    "type": "string",
+    "value": "mdp-datalake-dev-857854758128"
+  },
+  "environment": {
+    "sensitive": false,
+    "type": "string",
+    "value": "dev"
+  },
+  "gold_database": {
+    "sensitive": false,
+    "type": "string",
+    "value": "mdp_gold_dev"
+  },
+  "silver_database": {
+    "sensitive": false,
+    "type": "string",
+    "value": "mdp_silver_dev"
+  }
+}
