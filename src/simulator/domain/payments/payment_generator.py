@@ -59,9 +59,7 @@ class PaymentGenerator:
             payment_id=self._faker.uuid4(cast_to=None),
             order_id=order_id,
             payment_method_id=payment_method_id,
-            transaction_code=self._faker.unique.bothify(
-                "TXN################"
-            ),
+            transaction_code=self._faker.unique.bothify("TXN################"),
             amount=amount,
             status=status,
             authorized_at=authorized_at,

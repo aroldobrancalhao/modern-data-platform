@@ -4,7 +4,6 @@ from simulator.domain.reviews.review_model import Review
 
 
 class ReviewRepository:
-
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
@@ -14,7 +13,6 @@ class ReviewRepository:
     ) -> None:
 
         with self._connection.cursor() as cursor:
-
             cursor.execute(
                 """
                 INSERT INTO marketplace.reviews

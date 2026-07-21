@@ -92,7 +92,7 @@ class ProductRepository:
             row = cursor.fetchone()
 
         return row[0] if row else None
-    
+
     def get_random_product(self) -> tuple[UUID, Decimal] | None:
         with self._connection.cursor() as cursor:
             cursor.execute(

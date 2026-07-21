@@ -22,7 +22,6 @@ from airflow.settings import Session
 
 
 class AirflowManager:
-
     def __init__(self) -> None:
         self._config_directory = Path(__file__).resolve().parent.parent
 
@@ -40,9 +39,7 @@ class AirflowManager:
         session = Session()
 
         try:
-
             for values in connections:
-
                 conn_id = values["conn_id"]
 
                 connection = self._get_connection(
@@ -51,7 +48,6 @@ class AirflowManager:
                 )
 
                 if connection is None:
-
                     connection = Connection(**values)
 
                     self._save_connection(
@@ -113,9 +109,7 @@ class AirflowManager:
         session = Session()
 
         try:
-
             for values in pools:
-
                 name = values["name"]
 
                 pool = self._get_pool(
@@ -124,7 +118,6 @@ class AirflowManager:
                 )
 
                 if pool is None:
-
                     pool = Pool(
                         pool=name,
                         slots=values["slots"],
@@ -210,9 +203,7 @@ class AirflowManager:
         value = os.getenv(name)
 
         if value is None:
-            raise RuntimeError(
-                f"Environment variable '{name}' is not defined."
-            )
+            raise RuntimeError(f"Environment variable '{name}' is not defined.")
 
         return value
 
@@ -317,7 +308,6 @@ class AirflowManager:
             mode="r",
             encoding="utf-8",
         ) as file:
-
             return json.load(file)
 
     @staticmethod
@@ -326,8 +316,4 @@ class AirflowManager:
         name: str,
     ) -> Pool | None:
 
-        return (
-            session.query(Pool)
-            .filter(Pool.pool == name)
-            .one_or_none()
-        )
+        return session.query(Pool).filter(Pool.pool == name).one_or_none()

@@ -33,9 +33,7 @@ class TerraformOutputs:
         self,
         file_name: str = "terraform_outputs.json",
     ) -> None:
-        self._file_path = (
-            Path(__file__).resolve().parent.parent / file_name
-        )
+        self._file_path = Path(__file__).resolve().parent.parent / file_name
 
     def load(self) -> dict[str, Any]:
         """
@@ -66,11 +64,7 @@ class TerraformOutputs:
         normalized: dict[str, Any] = {}
 
         for key, value in outputs.items():
-
-            if (
-                isinstance(value, dict)
-                and "value" in value
-            ):
+            if isinstance(value, dict) and "value" in value:
                 normalized[key] = value["value"]
             else:
                 normalized[key] = value

@@ -27,7 +27,6 @@ def retry_validation():
         )
 
         if executed == "false":
-
             Variable.set(
                 "retry_validation",
                 "true",

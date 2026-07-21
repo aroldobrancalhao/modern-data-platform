@@ -77,8 +77,6 @@ def _add_metadata(df: DataFrame) -> DataFrame:
     """
     Add standard metadata columns.
     """
-    return (
-        df
-        .withColumn("processed_at", current_timestamp())
-        .withColumn("processing_date", current_date())
+    return df.withColumn("processed_at", current_timestamp()).withColumn(
+        "processing_date", current_date()
     )

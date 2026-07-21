@@ -38,7 +38,7 @@ class Seller:
             created_at=now,
             updated_at=now,
         )
-    
+
 
 @dataclass(slots=True)
 class Category:

@@ -10,7 +10,6 @@ from simulator.domain.logistics.shipment_model import Shipment
 
 
 class ShipmentGenerator:
-
     _STATUS = (
         "DELIVERED",
         "IN_TRANSIT",
@@ -56,9 +55,7 @@ class ShipmentGenerator:
             "IN_TRANSIT",
             "DELIVERED",
         ):
-            estimated_delivery = now + timedelta(
-                days=self._faker.random_int(2, 10)
-            )
+            estimated_delivery = now + timedelta(days=self._faker.random_int(2, 10))
 
         if status == "DELIVERED":
             delivered_at = estimated_delivery
@@ -66,9 +63,7 @@ class ShipmentGenerator:
         return Shipment.create(
             order_id=order_id,
             carrier_id=carrier_id,
-            tracking_code=self._faker.unique.bothify(
-                "BR##################"
-            ),
+            tracking_code=self._faker.unique.bothify("BR##################"),
             status=status,
             shipped_at=shipped_at,
             estimated_delivery_at=estimated_delivery,

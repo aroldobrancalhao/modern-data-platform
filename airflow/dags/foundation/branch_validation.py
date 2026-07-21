@@ -18,7 +18,6 @@ with DAG(
     catchup=False,
     tags=["foundation", "branch"],
 ) as dag:
-
     start = EmptyOperator(
         task_id="start",
     )

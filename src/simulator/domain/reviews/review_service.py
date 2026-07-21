@@ -7,7 +7,6 @@ from simulator.domain.reviews.review_repository import ReviewRepository
 
 
 class ReviewService:
-
     def __init__(self) -> None:
         self._database = Database()
         self._generator = ReviewGenerator()
@@ -15,7 +14,6 @@ class ReviewService:
     def create_review(self) -> Review:
 
         with self._database.connection() as connection:
-
             order_repository = OrderRepository(connection)
 
             order = order_repository.get_random_order()

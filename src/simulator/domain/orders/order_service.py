@@ -51,7 +51,6 @@ class OrderService:
             order_repository = OrderRepository(connection)
             movement_repository = InventoryMovementRepository(connection)
 
-            
             order_repository.create_order(
                 order=order,
                 order_item=order_item,
