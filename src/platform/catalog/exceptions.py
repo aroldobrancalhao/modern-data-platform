@@ -1,4 +1,4 @@
-from platform.exceptions.platform_exception import PlatformException
+from platform.exceptions import PlatformException
 
 
 class CatalogError(PlatformException):

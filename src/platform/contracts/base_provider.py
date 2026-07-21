@@ -1,9 +1,9 @@
-from abc import ABC
+from platform.providers.provider import Provider
 
 from platform.types import PlatformProvider
 
 
-class BaseProvider(ABC):
+class BaseProvider(Provider):
     """
     Base class for every platform provider.
     """

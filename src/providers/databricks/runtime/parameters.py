@@ -1,3 +1,6 @@
+from typing import Any
+
+dbutils: Any
 
 def get_parameter(
     name: str,

@@ -1,5 +1,7 @@
 from uuid import UUID
 
+from decimal import Decimal
+
 from psycopg import Connection
 
 from simulator.domain.inventory.inventory_model import Inventory
@@ -109,7 +111,7 @@ class InventoryRepository:
     def get_product(
         self,
         product_id,
-    ) -> float | None:
+    ) -> Decimal | None:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """

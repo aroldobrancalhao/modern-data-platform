@@ -1,7 +1,7 @@
 from platform.providers.provider_registry import ProviderRegistry
 
-from providers.aws.catalog.aws_glue_builder import AwsGlueBuilder
-from providers.aws.storage.aws_s3_builder import AwsS3Builder
+from providers.aws.catalog.builder import GlueCatalogBuilder
+from providers.aws.storage.builder import S3StorageBuilder
 
 
 def register(
@@ -10,10 +10,10 @@ def register(
 
     registry.register(
         "aws.s3",
-        AwsS3Builder,
+        S3StorageBuilder,
     )
 
     registry.register(
         "aws.glue",
-        AwsGlueBuilder,
+        GlueCatalogBuilder,
     )

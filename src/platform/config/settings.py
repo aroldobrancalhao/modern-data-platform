@@ -25,3 +25,10 @@ class PlatformSettings(BaseSettings):
     model_config = SettingsConfigDict(
         extra="ignore",
     )
+
+class Settings(PlatformSettings):
+    """
+    Backward compatibility alias.
+    """
+
+    pass

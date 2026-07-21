@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from mypy_boto3_s3.type_defs import HeadObjectOutputTypeDef
+from mypy_boto3_s3.type_defs import ObjectTypeDef
 
 from platform.storage.models import StorageLocation
 from platform.storage.models import StorageMetadata
@@ -14,7 +15,7 @@ class AwsStorageMapper:
 
     @staticmethod
     def to_storage_metadata(
-        response: dict[str, Any],
+        response: HeadObjectOutputTypeDef,
     ) -> StorageMetadata:
 
         return StorageMetadata(
@@ -28,7 +29,7 @@ class AwsStorageMapper:
     @staticmethod
     def to_storage_object(
         location: StorageLocation,
-        response: dict[str, Any],
+        response: HeadObjectOutputTypeDef,
     ) -> StorageObject:
 
         return StorageObject(
@@ -40,7 +41,7 @@ class AwsStorageMapper:
     def to_storage_object_summary(
         scheme: str,
         bucket: str,
-        response: dict[str, Any],
+        response: ObjectTypeDef,
     ) -> StorageObject:
 
         location = StorageLocation(

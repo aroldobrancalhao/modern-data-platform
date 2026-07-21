@@ -1,17 +1,22 @@
-from __future__ import annotations
-
 from abc import ABC
 from abc import abstractmethod
-from collections.abc import Sequence
+
+from platform.catalog.models import CatalogDatabase
+from platform.catalog.models import CatalogTable
+from platform.storage.models import StorageLocation
 
 
 class CatalogProvider(ABC):
     """
-    Defines the contract for metadata catalog providers.
+    Abstract catalog provider.
 
-    Implementations are responsible for exposing catalog
-    operations independently of the underlying cloud.
+    Defines the contract for metadata catalogs such as AWS Glue,
+    Databricks Unity Catalog and Hive Metastore.
     """
+
+    #
+    # Databases
+    #
 
     @abstractmethod
     def database_exists(
@@ -19,20 +24,19 @@ class CatalogProvider(ABC):
         database: str,
     ) -> bool:
         """
-        Returns True when the database exists.
+        Returns True if the database exists.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def create_database(
         self,
-        database: str,
-        description: str | None = None,
+        database: CatalogDatabase,
     ) -> None:
         """
-        Creates a database if it does not exist.
+        Creates a database.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def delete_database(
@@ -42,16 +46,28 @@ class CatalogProvider(ABC):
         """
         Deletes a database.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
-    def list_databases(
+    def get_database(
         self,
-    ) -> Sequence[str]:
+        database: str,
+    ) -> CatalogDatabase:
         """
-        Returns all available databases.
+        Returns a database definition.
         """
-        raise NotImplementedError
+        ...
+
+    @abstractmethod
+    def list_databases(self) -> list[CatalogDatabase]:
+        """
+        Lists all databases.
+        """
+        ...
+
+    #
+    # Tables
+    #
 
     @abstractmethod
     def table_exists(
@@ -60,23 +76,19 @@ class CatalogProvider(ABC):
         table: str,
     ) -> bool:
         """
-        Returns True when a table exists.
+        Returns True if the table exists.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def create_table(
         self,
-        database: str,
-        table: str,
-        location: str,
-        columns: list[dict],
-        partition_keys: list[dict] | None = None,
+        table: CatalogTable,
     ) -> None:
         """
-        Creates a metadata table.
+        Creates a table.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def delete_table(
@@ -87,40 +99,51 @@ class CatalogProvider(ABC):
         """
         Deletes a table.
         """
-        raise NotImplementedError
+        ...
+
+    @abstractmethod
+    def get_table(
+        self,
+        database: str,
+        table: str,
+    ) -> CatalogTable:
+        """
+        Returns a table definition.
+        """
+        ...
 
     @abstractmethod
     def list_tables(
         self,
         database: str,
-    ) -> Sequence[str]:
+    ) -> list[CatalogTable]:
         """
         Lists all tables inside a database.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def get_table_location(
         self,
         database: str,
         table: str,
-    ) -> str:
+    ) -> StorageLocation:
         """
-        Returns the storage location of a table.
+        Returns the physical storage location of a table.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def update_table_location(
         self,
         database: str,
         table: str,
-        location: str,
+        location: StorageLocation,
     ) -> None:
         """
-        Updates table storage location.
+        Updates the physical storage location of a table.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def repair_table(
@@ -129,6 +152,6 @@ class CatalogProvider(ABC):
         table: str,
     ) -> None:
         """
-        Refreshes table partitions.
+        Repairs table metadata.
         """
-        raise NotImplementedError
+        ...

@@ -9,7 +9,7 @@ class CustomerRepository:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def insert(self, customer: Customer) -> None:
+    def insert(self, customer: Customer) -> bool:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """

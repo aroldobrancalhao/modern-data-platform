@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from typing import Any
 
-from platform.catalog.catalog_provider import CatalogProvider
+from platform.catalog import CatalogColumn
+from platform.catalog import CatalogDatabase
+from platform.catalog import CatalogProvider
+from platform.catalog import CatalogTable
 from platform.catalog.exceptions import (
     DatabaseAlreadyExistsError,
     DatabaseNotFoundError,
@@ -12,6 +13,7 @@ from platform.catalog.exceptions import (
     TableNotFoundError,
 )
 from platform.contracts.base_provider import BaseProvider
+from platform.storage.models import StorageLocation
 from platform.types import PlatformProvider
 
 from providers.aws.core.aws_context import AwsContext
@@ -36,45 +38,84 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
         try:
             self._client.get_database(Name=database)
             return True
-
         except self._client.exceptions.EntityNotFoundException:
             return False
 
     def create_database(
         self,
-        database: str,
-        description: str | None = None,
+        database: CatalogDatabase,
     ) -> None:
 
-        if self.database_exists(database):
-            raise DatabaseAlreadyExistsError(database)
+        if self.database_exists(database.name):
+            raise DatabaseAlreadyExistsError(database.name)
 
         database_input: dict[str, Any] = {
-            "Name": database,
+            "Name": database.name,
         }
 
-        if description:
-            database_input["Description"] = description
+        if database.description:
+            database_input["Description"] = database.description
+
+        if database.location:
+            database_input["LocationUri"] = str(database.location)
 
         self._client.create_database(
             DatabaseInput=database_input,
         )
 
-    def delete_database(self, database: str) -> None:
+    def get_database(
+        self,
+        database: str,
+    ) -> CatalogDatabase:
+
+        if not self.database_exists(database):
+            raise DatabaseNotFoundError(database)
+
+        response = self._client.get_database(Name=database)
+
+        data = response["Database"]
+
+        location = data.get("LocationUri")
+
+        return CatalogDatabase(
+            name=data["Name"],
+            description=data.get("Description"),
+            location=StorageLocation.from_uri(location)
+            if location
+            else None,
+        )
+
+    def delete_database(
+        self,
+        database: str,
+    ) -> None:
 
         if not self.database_exists(database):
             raise DatabaseNotFoundError(database)
 
         self._client.delete_database(Name=database)
 
-    def list_databases(self) -> Sequence[str]:
+    def list_databases(self) -> list[CatalogDatabase]:
 
         paginator = self._client.get_paginator("get_databases")
 
-        databases: list[str] = []
+        databases: list[CatalogDatabase] = []
 
         for page in paginator.paginate():
-            databases.extend(database["Name"] for database in page["DatabaseList"])
+
+            for database in page["DatabaseList"]:
+
+                location = database.get("LocationUri")
+
+                databases.append(
+                    CatalogDatabase(
+                        name=database["Name"],
+                        description=database.get("Description"),
+                        location=StorageLocation.from_uri(location)
+                        if location
+                        else None,
+                    )
+                )
 
         return databases
 
@@ -87,13 +128,11 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
         database: str,
         table: str,
     ) -> bool:
-
         try:
             self._client.get_table(
                 DatabaseName=database,
                 Name=table,
             )
-
             return True
 
         except self._client.exceptions.EntityNotFoundException:
@@ -101,32 +140,100 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
 
     def create_table(
         self,
-        database: str,
-        table: str,
-        location: str,
-        columns: list[dict],
-        partition_keys: list[dict] | None = None,
+        table: CatalogTable,
     ) -> None:
 
-        if self.table_exists(database, table):
-            raise TableAlreadyExistsError(table)
+        if self.table_exists(table.database, table.name):
+            raise TableAlreadyExistsError(table.name)
+
+        columns = [
+            {
+                "Name": column.name,
+                "Type": column.type,
+                **(
+                    {"Comment": column.comment}
+                    if column.comment
+                    else {}
+                ),
+            }
+            for column in table.columns
+        ]
+
+        partition_keys = [
+            {
+                "Name": partition,
+                "Type": "string",
+            }
+            for partition in table.partitions
+        ]
 
         self._client.create_table(
-            DatabaseName=database,
+            DatabaseName=table.database,
             TableInput={
-                "Name": table,
+                "Name": table.name,
+                "Description": table.description,
                 "StorageDescriptor": {
                     "Columns": columns,
-                    "Location": location,
-                    "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-                    "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+                    "Location": str(table.location),
+                    "InputFormat": (
+                        "org.apache.hadoop.mapred.TextInputFormat"
+                    ),
+                    "OutputFormat": (
+                        "org.apache.hadoop.hive.ql.io."
+                        "HiveIgnoreKeyTextOutputFormat"
+                    ),
                     "SerdeInfo": {
-                        "SerializationLibrary": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+                        "SerializationLibrary": (
+                            "org.apache.hadoop.hive.serde2.lazy."
+                            "LazySimpleSerDe"
+                        ),
                     },
                 },
-                "PartitionKeys": partition_keys or [],
+                "PartitionKeys": partition_keys,
                 "TableType": "EXTERNAL_TABLE",
             },
+        )
+
+    def get_table(
+        self,
+        database: str,
+        table: str,
+    ) -> CatalogTable:
+
+        if not self.table_exists(database, table):
+            raise TableNotFoundError(table)
+
+        response = self._client.get_table(
+            DatabaseName=database,
+            Name=table,
+        )
+
+        data = response["Table"]
+        storage = data["StorageDescriptor"]
+
+        return CatalogTable(
+            database=database,
+            name=data["Name"],
+            description=data.get("Description"),
+            location=StorageLocation.from_uri(
+                storage["Location"],
+            ),
+            columns=[
+                CatalogColumn(
+                    name=column["Name"],
+                    type=column["Type"],
+                    nullable=True,
+                    comment=column.get("Comment"),
+                )
+                for column in storage.get("Columns", [])
+            ],
+            partitions=[
+                partition["Name"]
+                for partition in data.get(
+                    "PartitionKeys",
+                    [],
+                )
+            ],
         )
 
     def delete_table(
@@ -146,14 +253,54 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
     def list_tables(
         self,
         database: str,
-    ) -> Sequence[str]:
+    ) -> list[CatalogTable]:
 
-        paginator = self._client.get_paginator("get_tables")
+        paginator = self._client.get_paginator(
+            "get_tables",
+        )
 
-        tables: list[str] = []
+        tables: list[CatalogTable] = []
 
-        for page in paginator.paginate(DatabaseName=database):
-            tables.extend(table["Name"] for table in page["TableList"])
+        for page in paginator.paginate(
+            DatabaseName=database,
+        ):
+            for data in page["TableList"]:
+
+                storage = data["StorageDescriptor"]
+
+                tables.append(
+                    CatalogTable(
+                        database=database,
+                        name=data["Name"],
+                        description=data.get(
+                            "Description",
+                        ),
+                        location=StorageLocation.from_uri(
+                            storage["Location"],
+                        ),
+                        columns=[
+                            CatalogColumn(
+                                name=column["Name"],
+                                type=column["Type"],
+                                nullable=True,
+                                comment=column.get(
+                                    "Comment",
+                                ),
+                            )
+                            for column in storage.get(
+                                "Columns",
+                                [],
+                            )
+                        ],
+                        partitions=[
+                            partition["Name"]
+                            for partition in data.get(
+                                "PartitionKeys",
+                                [],
+                            )
+                        ],
+                    )
+                )
 
         return tables
 
@@ -161,23 +308,18 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
         self,
         database: str,
         table: str,
-    ) -> str:
+    ) -> StorageLocation:
 
-        if not self.table_exists(database, table):
-            raise TableNotFoundError(table)
-
-        response = self._client.get_table(
-            DatabaseName=database,
-            Name=table,
-        )
-
-        return response["Table"]["StorageDescriptor"]["Location"]
+        return self.get_table(
+            database,
+            table,
+        ).location
 
     def update_table_location(
         self,
         database: str,
         table: str,
-        location: str,
+        location: StorageLocation,
     ) -> None:
 
         response = self._client.get_table(
@@ -187,7 +329,9 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
 
         table_input = response["Table"]
 
-        table_input["StorageDescriptor"]["Location"] = location
+        table_input["StorageDescriptor"][
+            "Location"
+        ] = str(location)
 
         for field in (
             "DatabaseName",
@@ -210,11 +354,6 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
         database: str,
         table: str,
     ) -> None:
-        """
-        AWS Glue has no native MSCK REPAIR equivalent.
-
-        This method intentionally exists to keep the
-        provider contract cloud-agnostic.
-        """
-
-        return
+        raise NotImplementedError(
+            "Glue Catalog does not support repair_table."
+        )
