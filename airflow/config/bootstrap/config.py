@@ -22,9 +22,7 @@ class ConfigLoader:
         self,
         file_name: str = "config.yaml",
     ) -> None:
-        self._file_path = (
-            Path(__file__).resolve().parent.parent / file_name
-        )
+        self._file_path = Path(__file__).resolve().parent.parent / file_name
 
         self._jinja = Environment(
             undefined=StrictUndefined,
@@ -41,9 +39,7 @@ class ConfigLoader:
             Configuration dictionary.
         """
         if not self._file_path.exists():
-            raise FileNotFoundError(
-                f"Configuration file not found: {self._file_path}"
-            )
+            raise FileNotFoundError(f"Configuration file not found: {self._file_path}")
 
         load_dotenv()
 
@@ -61,8 +57,6 @@ class ConfigLoader:
             return {}
 
         if not isinstance(config, dict):
-            raise ValueError(
-                "config.yaml must contain a dictionary at the root level."
-            )
+            raise ValueError("config.yaml must contain a dictionary at the root level.")
 
         return config

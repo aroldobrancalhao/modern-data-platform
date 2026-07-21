@@ -6,6 +6,7 @@ from pydantic_settings import SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[3]
 
+
 class Settings(BaseSettings):
     # PostgreSQL
     postgres_host: str

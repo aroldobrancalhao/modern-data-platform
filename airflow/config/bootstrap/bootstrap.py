@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 class Bootstrap:
-
     def __init__(self) -> None:
         self._config_loader = ConfigLoader()
         self._terraform_loader = TerraformOutputs()

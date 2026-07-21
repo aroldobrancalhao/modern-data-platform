@@ -8,7 +8,6 @@ from simulator.domain.orders.order_repository import OrderRepository
 
 
 class ShipmentService:
-
     CARRIERS = (
         ("CORREIOS", "Correios"),
         ("LOGGI", "Loggi"),
@@ -24,11 +23,9 @@ class ShipmentService:
     def create_shipment(self) -> Shipment:
 
         with self._database.connection() as connection:
-
             repository = ShipmentRepository(connection)
 
             for code, name in self.CARRIERS:
-
                 repository.create_carrier(
                     Carrier.create(
                         code=code,

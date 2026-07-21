@@ -12,9 +12,7 @@ def get_logger(name: str) -> logging.Logger:
 
     handler = logging.StreamHandler()
 
-    formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
 
     handler.setFormatter(formatter)
 

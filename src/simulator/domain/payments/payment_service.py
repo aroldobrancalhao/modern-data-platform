@@ -10,7 +10,6 @@ from simulator.domain.payments.payment_repository import PaymentRepository
 
 
 class PaymentService:
-
     PAYMENT_METHODS = (
         ("PIX", "Pix"),
         ("CREDIT_CARD", "Credit Card"),
@@ -26,11 +25,9 @@ class PaymentService:
     def create_payment(self) -> Payment:
 
         with self._database.connection() as connection:
-
             repository = PaymentRepository(connection)
 
             for code, name in self.PAYMENT_METHODS:
-
                 repository.create_payment_method(
                     PaymentMethod.create(
                         code=code,

@@ -4,7 +4,6 @@ from simulator.domain.reviews.review_model import Review
 
 
 class ReviewGenerator:
-
     _RATINGS = (5, 4, 3, 2, 1)
 
     _WEIGHTS = (

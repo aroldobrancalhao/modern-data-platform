@@ -87,7 +87,9 @@ class InventoryRepository:
                 ),
             )
 
-    def get_random_inventory(self,) -> tuple[UUID, UUID, int] | None:
+    def get_random_inventory(
+        self,
+    ) -> tuple[UUID, UUID, int] | None:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -103,7 +105,7 @@ class InventoryRepository:
             )
 
             return cursor.fetchone()
-        
+
     def get_product(
         self,
         product_id,

@@ -63,15 +63,10 @@ class MarketplaceScheduler:
             print(f"Review created: {review.review_id} ({review.rating}★)")
 
     def run_batch(self) -> None:
-        print(
-            f"\nStarting batch with "
-            f"{self._settings.simulator_batch_size} cycle(s)\n"
-        )
+        print(f"\nStarting batch with {self._settings.simulator_batch_size} cycle(s)\n")
 
         for index in range(self._settings.simulator_batch_size):
-            print(
-                f"========== Cycle {index + 1} =========="
-            )
+            print(f"========== Cycle {index + 1} ==========")
 
             self.run_cycle()
 
@@ -84,11 +79,6 @@ class MarketplaceScheduler:
         while True:
             self.run_batch()
 
-            print(
-                f"Waiting "
-                f"{self._settings.simulator_interval_seconds} second(s)..."
-            )
+            print(f"Waiting {self._settings.simulator_interval_seconds} second(s)...")
 
-            sleep(
-                self._settings.simulator_interval_seconds
-            )
+            sleep(self._settings.simulator_interval_seconds)

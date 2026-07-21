@@ -1,6 +1,5 @@
 from simulator.core.database import Database
 from simulator.domain.customer.address_generator import CustomerAddressGenerator
-from simulator.domain.customer.address_model import CustomerAddress
 from simulator.domain.customer.address_repository import CustomerAddressRepository
 from simulator.domain.customer.customer_generator import CustomerGenerator
 from simulator.domain.customer.customer_model import Customer

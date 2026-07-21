@@ -13,7 +13,7 @@ class CustomerAddress:
     street: str
     street_number: str
     complement: str | None
-    district: str |None
+    district: str | None
     city: str
     state: str
     country: str
