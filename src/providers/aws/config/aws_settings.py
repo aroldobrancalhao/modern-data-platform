@@ -9,7 +9,7 @@ class AwsSettings:
     Configuration for AWS services.
     """
 
-    region: str
+    region: str = "us-east-1"
 
     access_key_id: str | None = None
 

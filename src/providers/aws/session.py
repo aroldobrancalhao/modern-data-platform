@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import boto3
+from typing import Any, cast
 
+import boto3
 from botocore.client import BaseClient
 
-from .config import AWSSettings
+from .config import AwsSettings
 
 
 class AWSSession:
@@ -14,7 +15,7 @@ class AWSSession:
     Every AWS provider shares this session.
     """
 
-    def __init__(self, settings: AWSSettings):
+    def __init__(self, settings: AwsSettings):
         self._settings = settings
 
         self._session = boto3.Session(
@@ -26,17 +27,20 @@ class AWSSession:
         )
 
     @property
-    def session(self):
+    def session(self) -> boto3.Session:
         return self._session
 
     def client(self, service: str) -> BaseClient:
-        return self._session.client(
-            service,
-            endpoint_url=self._settings.endpoint_url,
+        return cast(
+            BaseClient,
+            self._session.client(
+                service_name=cast(Any, service),
+                endpoint_url=self._settings.endpoint_url,
+            ),
         )
 
-    def resource(self, service: str):
+    def resource(self, service: str) -> Any:
         return self._session.resource(
-            service,
+            service_name=cast(Any, service),
             endpoint_url=self._settings.endpoint_url,
         )

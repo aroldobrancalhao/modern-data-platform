@@ -1,18 +1,13 @@
-from platform.exceptions.capability_error import (
-    CapabilityError,
-    CapabilityNotSupportedError,
-)
-from platform.exceptions.configuration_error import (
-    ConfigurationError,
-)
-from platform.exceptions.platform_exception import (
-    PlatformException,
-)
-from platform.exceptions.provider_error import (
-    InvalidProviderError,
+from .platform_exception import PlatformException
+from .configuration_error import ConfigurationError
+from .provider_error import (
     ProviderAlreadyRegisteredError,
     ProviderError,
     ProviderNotFoundError,
+)
+from .capability_error import (
+    CapabilityError,
+    CapabilityNotSupportedError,
 )
 
 __all__ = [
@@ -21,7 +16,6 @@ __all__ = [
     "ProviderError",
     "ProviderNotFoundError",
     "ProviderAlreadyRegisteredError",
-    "InvalidProviderError",
     "CapabilityError",
     "CapabilityNotSupportedError",
 ]

@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import BinaryIO
 from typing import Iterable
 
-from botocore.client import BaseClient
 from botocore.exceptions import ClientError
+from mypy_boto3_s3.client import S3Client
 
 from platform.storage import StorageProvider
 from platform.storage.models import StorageLocation
@@ -13,15 +13,19 @@ from platform.storage.models import StorageObject
 
 from providers.aws.storage.error_mapper import AwsStorageErrorMapper
 from providers.aws.storage.mapper import AwsStorageMapper
+from platform.contracts.base_provider import BaseProvider
 
 
-class S3StorageProvider(StorageProvider):
+class S3StorageProvider(
+    BaseProvider,
+    StorageProvider,
+):
     """
     AWS S3 implementation of StorageProvider.
     """
 
-    def __init__(self, client: BaseClient):
-        self._client = client
+    def __init__(self, client: S3Client):
+        self._client: S3Client = client
 
     def exists(
         self,

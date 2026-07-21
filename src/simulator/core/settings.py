@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from pathlib import Path
 from functools import lru_cache
 
@@ -56,4 +58,13 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    if TYPE_CHECKING:
+        return Settings(
+            postgres_host="",
+            postgres_port=5432,
+            postgres_database="",
+            postgres_user="",
+            postgres_password="",
+        )
+
     return Settings()
