@@ -1,7 +1,7 @@
 from data_platform.providers.provider_builder import ProviderBuilder
 
-from providers.aws.catalog.glue_catalog_provider import GlueCatalogProvider
-from providers.aws.core.aws_context import AwsContext
+from integrations.aws.catalog.glue_catalog_provider import GlueCatalogProvider
+from integrations.aws.core.aws_context import AwsContext
 from data_platform.providers.provider import Provider
 
 

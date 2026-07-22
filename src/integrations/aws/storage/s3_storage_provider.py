@@ -11,8 +11,8 @@ from data_platform.storage import StorageProvider
 from data_platform.storage.models import StorageLocation
 from data_platform.storage.models import StorageObject
 
-from providers.aws.storage.error_mapper import AwsStorageErrorMapper
-from providers.aws.storage.mapper import AwsStorageMapper
+from integrations.aws.storage.error_mapper import AwsStorageErrorMapper
+from integrations.aws.storage.mapper import AwsStorageMapper
 from data_platform.contracts.base_provider import BaseProvider
 
 

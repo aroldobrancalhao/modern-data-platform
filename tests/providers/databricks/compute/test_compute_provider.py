@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 from data_platform.models.compute import Execution
 from data_platform.models.compute import ExecutionStatus
 from data_platform.models.compute import Workload
-from providers.databricks.compute.databricks_compute_provider import (
+from integrations.databricks.compute.databricks_compute_provider import (
     DatabricksComputeProvider,
 )
 

@@ -1,6 +1,6 @@
 from data_platform.providers.provider_registry import ProviderRegistry
 
-from providers.databricks.compute.builder import (
+from integrations.databricks.compute.builder import (
     DatabricksComputeBuilder,
 )
 

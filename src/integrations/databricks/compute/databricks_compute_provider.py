@@ -4,8 +4,8 @@ from data_platform.contracts.compute_provider import ComputeProvider
 from data_platform.models.compute import Execution
 from data_platform.models.compute import Workload
 
-from providers.databricks.compute.client import DatabricksClient
-from providers.databricks.compute.mapper import DatabricksComputeMapper
+from integrations.databricks.compute.client import DatabricksClient
+from integrations.databricks.compute.mapper import DatabricksComputeMapper
 
 
 class DatabricksComputeProvider(ComputeProvider):

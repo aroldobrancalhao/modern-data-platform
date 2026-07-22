@@ -1,7 +1,7 @@
 from data_platform.providers.provider_registry import ProviderRegistry
 
-from providers.aws.catalog.builder import GlueCatalogBuilder
-from providers.aws.storage.builder import S3StorageBuilder
+from integrations.aws.catalog.builder import GlueCatalogBuilder
+from integrations.aws.storage.builder import S3StorageBuilder
 
 
 def register(

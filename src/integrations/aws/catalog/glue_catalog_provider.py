@@ -16,7 +16,7 @@ from data_platform.contracts.base_provider import BaseProvider
 from data_platform.storage.models import StorageLocation
 from data_platform.types import PlatformProvider
 
-from providers.aws.core.aws_context import AwsContext
+from integrations.aws.core.aws_context import AwsContext
 
 
 class GlueCatalogProvider(BaseProvider, CatalogProvider):

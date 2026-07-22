@@ -4,7 +4,7 @@ from databricks.sdk.service.jobs import RunResultState
 from databricks.sdk.service.jobs import RunState
 
 from data_platform.models.compute import ExecutionStatus
-from providers.databricks.compute.mapper import DatabricksComputeMapper
+from integrations.databricks.compute.mapper import DatabricksComputeMapper
 
 
 def make_run(

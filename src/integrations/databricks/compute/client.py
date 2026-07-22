@@ -1,7 +1,7 @@
 from databricks.sdk.service.jobs import Run
 
 from data_platform.models.compute import Workload
-from providers.databricks.core.databricks_context import DatabricksContext
+from integrations.databricks.core.databricks_context import DatabricksContext
 
 
 class DatabricksClient:
