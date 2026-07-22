@@ -4,7 +4,7 @@ import boto3
 from botocore.client import BaseClient
 from botocore.config import Config
 
-from providers.aws.config import AwsSettings
+from integrations.aws.config import AwsSettings
 
 
 class S3Client:

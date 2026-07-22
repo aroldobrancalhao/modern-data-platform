@@ -2,7 +2,7 @@ from functools import cached_property
 
 import boto3
 
-from providers.aws.config import AwsSettings
+from integrations.aws.config import AwsSettings
 
 
 class AwsContext:
