@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from platform.catalog import CatalogColumn
-from platform.catalog import CatalogDatabase
-from platform.catalog import CatalogProvider
-from platform.catalog import CatalogTable
-from platform.catalog.exceptions import (
+from data_platform.catalog import CatalogColumn
+from data_platform.catalog import CatalogDatabase
+from data_platform.catalog import CatalogProvider
+from data_platform.catalog import CatalogTable
+from data_platform.catalog.exceptions import (
     DatabaseAlreadyExistsError,
     DatabaseNotFoundError,
     TableAlreadyExistsError,
     TableNotFoundError,
 )
-from platform.contracts.base_provider import BaseProvider
-from platform.storage.models import StorageLocation
-from platform.types import PlatformProvider
+from data_platform.contracts.base_provider import BaseProvider
+from data_platform.storage.models import StorageLocation
+from data_platform.types import PlatformProvider
 
 from providers.aws.core.aws_context import AwsContext
 

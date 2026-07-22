@@ -1,8 +1,8 @@
-from platform.providers.provider_builder import ProviderBuilder
+from data_platform.providers.provider_builder import ProviderBuilder
 
 from providers.aws.core.aws_context import AwsContext
 from providers.aws.storage.s3_storage_provider import S3StorageProvider
-from platform.providers.provider import Provider
+from data_platform.providers.provider import Provider
 
 
 class S3StorageBuilder(ProviderBuilder):

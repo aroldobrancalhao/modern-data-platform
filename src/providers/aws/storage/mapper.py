@@ -3,9 +3,9 @@ from __future__ import annotations
 from mypy_boto3_s3.type_defs import HeadObjectOutputTypeDef
 from mypy_boto3_s3.type_defs import ObjectTypeDef
 
-from platform.storage.models import StorageLocation
-from platform.storage.models import StorageMetadata
-from platform.storage.models import StorageObject
+from data_platform.storage.models import StorageLocation
+from data_platform.storage.models import StorageMetadata
+from data_platform.storage.models import StorageObject
 
 
 class AwsStorageMapper:
