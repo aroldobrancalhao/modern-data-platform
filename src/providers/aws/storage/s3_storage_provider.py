@@ -7,13 +7,13 @@ from typing import Iterable
 from botocore.exceptions import ClientError
 from mypy_boto3_s3.client import S3Client
 
-from platform.storage import StorageProvider
-from platform.storage.models import StorageLocation
-from platform.storage.models import StorageObject
+from data_platform.storage import StorageProvider
+from data_platform.storage.models import StorageLocation
+from data_platform.storage.models import StorageObject
 
 from providers.aws.storage.error_mapper import AwsStorageErrorMapper
 from providers.aws.storage.mapper import AwsStorageMapper
-from platform.contracts.base_provider import BaseProvider
+from data_platform.contracts.base_provider import BaseProvider
 
 
 class S3StorageProvider(

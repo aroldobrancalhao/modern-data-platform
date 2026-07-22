@@ -1,4 +1,4 @@
-from platform.providers.provider_registry import ProviderRegistry
+from data_platform.providers.provider_registry import ProviderRegistry
 
 from providers.databricks.compute.builder import (
     DatabricksComputeBuilder,
@@ -8,6 +8,9 @@ from providers.databricks.compute.builder import (
 def register(
     registry: ProviderRegistry,
 ) -> None:
+    """
+    Register Databricks providers.
+    """
 
     registry.register(
         "databricks",

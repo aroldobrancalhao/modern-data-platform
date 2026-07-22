@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from platform.catalog import CatalogColumn
-from platform.catalog import CatalogDatabase
-from platform.catalog import CatalogTable
-from platform.storage.models import StorageLocation
+from data_platform.catalog import CatalogColumn
+from data_platform.catalog import CatalogDatabase
+from data_platform.catalog import CatalogTable
+from data_platform.storage.models import StorageLocation
 
 
 class GlueCatalogMapper:
