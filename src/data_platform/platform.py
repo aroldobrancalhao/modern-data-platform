@@ -9,6 +9,7 @@ from data_platform.models.compute import Execution
 from data_platform.models.compute import Workload
 from data_platform.providers.provider import Provider
 from data_platform.providers.provider_factory import ProviderFactory
+from data_platform.workflow import WorkflowProvider
 
 
 class Platform:
@@ -49,6 +50,14 @@ class Platform:
             ComputeProvider,
             self._factory.create(
                 self._settings.compute_provider,
+            ),
+        )
+
+    def workflow(self) -> WorkflowProvider:
+        return cast(
+            WorkflowProvider,
+            self._factory.create(
+                self._settings.workflow_provider,
             ),
         )
 
