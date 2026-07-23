@@ -22,9 +22,15 @@ class PlatformSettings(BaseSettings):
         validation_alias="PLATFORM_COMPUTE_PROVIDER",
     )
 
+    workflow_provider: str = Field(
+        default="airflow",
+        validation_alias="PLATFORM_WORKFLOW_PROVIDER",
+    )
+
     model_config = SettingsConfigDict(
         extra="ignore",
     )
+
 
 class Settings(PlatformSettings):
     """

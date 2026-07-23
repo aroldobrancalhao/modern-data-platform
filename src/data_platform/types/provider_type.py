@@ -16,3 +16,4 @@ class ProviderType(StrEnum):
     NOTIFICATION = "notification"
     SECRETS = "secrets"
     IDENTITY = "identity"
+    WORKFLOW = "workflow"
