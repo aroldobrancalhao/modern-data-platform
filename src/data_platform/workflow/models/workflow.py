@@ -16,6 +16,16 @@ class Workflow:
     """
 
     identifier: str
+
     name: str
+
     description: str | None = None
+
     parameters: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def id(self) -> str:
+        """
+        Backward-compatible alias for identifier.
+        """
+        return self.identifier

@@ -15,7 +15,6 @@ def platform_validation():
 
     @task
     def execution_context() -> dict:
-
         execution = {
             "timestamp": datetime.utcnow().isoformat(),
         }
@@ -26,7 +25,6 @@ def platform_validation():
 
     @task
     def read_variable() -> str:
-
         environment = Variable.get(
             "environment",
             default_var="local",
@@ -41,16 +39,26 @@ def platform_validation():
         execution: dict,
         environment: str,
     ) -> None:
-
         print(f"Execution: {execution}")
         print(f"Environment: {environment}")
 
-        assert environment == "local"
+        valid_environments = {
+            "local",
+            "dev",
+            "qa",
+            "prod",
+        }
+
+        assert (
+            environment in valid_environments
+        ), (
+            f"Invalid environment '{environment}'. "
+            f"Expected one of: {sorted(valid_environments)}."
+        )
 
     validate(
         execution_context(),
         read_variable(),
     )
-
 
 platform_validation()

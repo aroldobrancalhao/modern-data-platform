@@ -37,7 +37,11 @@ class WorkflowProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_run(self, run_id: str) -> WorkflowRun:
+    def get_run(
+        self,
+        workflow_id: str,
+        run_id: str,
+    ) -> WorkflowRun:
         """
         Returns information about a workflow execution.
         """
@@ -56,6 +60,7 @@ class WorkflowProvider(ABC):
     @abstractmethod
     def cancel(
         self,
+        workflow_id: str,
         run_id: str,
     ) -> None:
         """
