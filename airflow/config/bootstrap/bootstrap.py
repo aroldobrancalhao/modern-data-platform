@@ -81,3 +81,4 @@ class Bootstrap:
         logger.info("Synchronizing Airflow Pools...")
 
         self._airflow_manager.sync_pools()
+
