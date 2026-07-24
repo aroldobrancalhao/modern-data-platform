@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+from typing import cast
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -97,7 +99,7 @@ def test_create_uses_standard_retry_configuration(
 
     _, kwargs = boto_session.client.call_args
 
-    config: Config = kwargs["config"]
+    config = cast(Any, kwargs["config"])
 
     assert config.retries["mode"] == "standard"
     assert config.retries["max_attempts"] == 10

@@ -261,6 +261,8 @@ def test_list_returns_storage_objects(
 
     assert storage_object.location.bucket == "bucket"
     assert storage_object.location.key == "folder/file.csv"
+
+    assert storage_object.metadata is not None
     assert storage_object.metadata.content_length == 100
     assert storage_object.metadata.etag == "etag"
 
@@ -301,6 +303,8 @@ def test_head(
     storage_object = provider.head(location)
 
     assert storage_object.location == location
+
+    assert storage_object.metadata is not None
     assert storage_object.metadata.content_length == 100
     assert storage_object.metadata.etag == "etag"
 
