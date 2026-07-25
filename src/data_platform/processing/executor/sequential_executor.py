@@ -32,13 +32,74 @@ class SequentialExecutor(BaseExecutor):
         stage_results: list[StageResult],
     ) -> ExecutionStatus:
 
-        for stage in pipeline:
+        await self._emit_before_pipeline(
+            pipeline=pipeline,
+            processing_context=context,
+        )
 
-            result = await stage.execute(context)
+        try:
 
-            stage_results.append(result)
+            for stage in pipeline:
 
-            if result.failed:
-                return ExecutionStatus.FAILED
+                await self._emit_before_stage(
+                    pipeline=pipeline,
+                    processing_context=context,
+                    stage=stage,
+                )
 
-        return ExecutionStatus.COMPLETED
+                try:
+
+                    result = await stage.execute(context)
+
+                except Exception as exc:
+
+                    await self._emit_stage_failed(
+                        pipeline=pipeline,
+                        processing_context=context,
+                        stage=stage,
+                        exception=exc,
+                    )
+
+                    await self._emit_pipeline_failed(
+                        pipeline=pipeline,
+                        processing_context=context,
+                        exception=exc,
+                    )
+
+                    raise
+
+                stage_results.append(result)
+
+                if result.failed:
+
+                    await self._emit_stage_failed(
+                        pipeline=pipeline,
+                        processing_context=context,
+                        stage=stage,
+                        result=result,
+                    )
+
+                    await self._emit_pipeline_failed(
+                        pipeline=pipeline,
+                        processing_context=context,
+                        result=result,
+                    )
+
+                    return ExecutionStatus.FAILED
+
+                await self._emit_after_stage(
+                    pipeline=pipeline,
+                    processing_context=context,
+                    stage=stage,
+                    result=result,
+                )
+
+            await self._emit_after_pipeline(
+                pipeline=pipeline,
+                processing_context=context,
+            )
+
+            return ExecutionStatus.COMPLETED
+
+        except Exception:
+            raise
