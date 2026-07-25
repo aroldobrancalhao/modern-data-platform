@@ -50,6 +50,20 @@ class BaseExecutor(Executor, ABC):
     ) -> None:
         """Register a hook for a lifecycle event."""
         self._hook_manager.register(hook_type, hook)
+    
+
+    def register_hooks(
+        self,
+        hook: Hook,
+    ) -> None:
+        """
+        Register the same hook for every lifecycle event.
+        """
+        for hook_type in HookType:
+            self.register_hook(
+                hook_type=hook_type,
+                hook=hook,
+            )
 
     def unregister_hook(
         self,
