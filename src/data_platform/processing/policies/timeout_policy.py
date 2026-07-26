@@ -11,12 +11,15 @@ from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 
-from data_platform.processing.events.hook_context import (
-    HookContext,
+from data_platform.processing.policies.policy import (
+    Policy,
 )
-
-from .policy import Policy
-from .policy_result import PolicyResult
+from data_platform.processing.policies.policy_context import (
+    PolicyContext,
+)
+from data_platform.processing.policies.policy_result import (
+    PolicyResult,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +37,7 @@ class TimeoutPolicy(Policy):
 
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
 
         started_at = (

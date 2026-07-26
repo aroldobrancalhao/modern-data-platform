@@ -9,12 +9,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from data_platform.processing.events.hook_context import (
-    HookContext,
+from data_platform.processing.policies.policy import (
+    Policy,
 )
-
-from .policy import Policy
-from .policy_result import PolicyResult
+from data_platform.processing.policies.policy_context import (
+    PolicyContext,
+)
+from data_platform.processing.policies.policy_result import (
+    PolicyResult,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,10 +35,17 @@ class FailurePolicy(Policy):
 
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
+        """
+        Evaluates the failure policy.
+        """
 
-        if context.exception is None:
+        exception = context.processing_context.get(
+            "exception",
+        )
+
+        if exception is None:
             return PolicyResult()
 
         if self.fail_fast:

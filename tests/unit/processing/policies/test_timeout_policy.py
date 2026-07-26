@@ -19,9 +19,6 @@ from data_platform.processing.core.execution_metadata import (
 from data_platform.processing.core.execution_status import (
     ExecutionStatus,
 )
-from data_platform.processing.core.pipeline import (
-    Pipeline,
-)
 from data_platform.processing.core.processing_context import (
     ProcessingContext,
 )
@@ -31,11 +28,8 @@ from data_platform.processing.core.stage import (
 from data_platform.processing.core.stage_result import (
     StageResult,
 )
-from data_platform.processing.events.hook_context import (
-    HookContext,
-)
-from data_platform.processing.events.hook_type import (
-    HookType,
+from data_platform.processing.policies.policy_context import (
+    PolicyContext,
 )
 from data_platform.processing.policies.timeout_policy import (
     TimeoutPolicy,
@@ -59,17 +53,11 @@ class DummyStage(Stage):
         )
 
 
-def create_pipeline() -> Pipeline:
+def create_stage() -> Stage:
 
-    return Pipeline(
-        id="pipeline",
-        name="Pipeline",
-        stages=(
-            DummyStage(
-                id="stage",
-                name="Stage",
-            ),
-        ),
+    return DummyStage(
+        id="stage",
+        name="Stage",
     )
 
 
@@ -92,9 +80,8 @@ async def test_should_continue_when_started_at_is_none() -> None:
     policy = TimeoutPolicy(timeout=10)
 
     result = await policy.evaluate(
-        HookContext(
-            hook_type=HookType.AFTER_STAGE,
-            pipeline=create_pipeline(),
+        PolicyContext(
+            stage=create_stage(),
             processing_context=create_context(
                 started_at=None,
             ),
@@ -110,9 +97,8 @@ async def test_should_continue_before_timeout() -> None:
     policy = TimeoutPolicy(timeout=60)
 
     result = await policy.evaluate(
-        HookContext(
-            hook_type=HookType.AFTER_STAGE,
-            pipeline=create_pipeline(),
+        PolicyContext(
+            stage=create_stage(),
             processing_context=create_context(
                 started_at=datetime.now(
                     UTC,
@@ -133,9 +119,8 @@ async def test_should_cancel_after_timeout() -> None:
     policy = TimeoutPolicy(timeout=5)
 
     result = await policy.evaluate(
-        HookContext(
-            hook_type=HookType.AFTER_STAGE,
-            pipeline=create_pipeline(),
+        PolicyContext(
+            stage=create_stage(),
             processing_context=create_context(
                 started_at=datetime.now(
                     UTC,

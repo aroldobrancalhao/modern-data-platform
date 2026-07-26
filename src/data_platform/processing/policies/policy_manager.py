@@ -9,12 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from data_platform.processing.events.hook_context import (
-    HookContext,
-)
-
-from .policy import Policy
-from .policy_result import PolicyResult
+from data_platform.processing.policies.policy import Policy
+from data_platform.processing.policies.policy_context import PolicyContext
+from data_platform.processing.policies.policy_result import PolicyResult
 
 
 class PolicyManager:
@@ -26,7 +23,6 @@ class PolicyManager:
         self,
         policies: Iterable[Policy] | None = None,
     ) -> None:
-
         self._policies = tuple(
             policies or ()
         )
@@ -43,7 +39,7 @@ class PolicyManager:
 
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
         """
         Evaluates all registered policies.
@@ -61,7 +57,6 @@ class PolicyManager:
         reason: str | None = None
 
         for policy in self._policies:
-
             result = await policy.evaluate(
                 context,
             )

@@ -7,8 +7,8 @@ Coordinates execution policy application.
 
 from __future__ import annotations
 
-from data_platform.processing.events.hook_context import (
-    HookContext,
+from data_platform.processing.policies.policy_context import (
+    PolicyContext,
 )
 from data_platform.processing.policies.policy_manager import (
     PolicyManager,
@@ -42,7 +42,7 @@ class PolicyEngine:
 
     async def apply(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
         """
         Applies all registered execution policies.

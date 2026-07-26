@@ -10,11 +10,8 @@ from __future__ import annotations
 from abc import ABC
 from abc import abstractmethod
 
-from data_platform.processing.events.hook_context import (
-    HookContext,
-)
-
-from .policy_result import PolicyResult
+from data_platform.processing.policies.policy_context import PolicyContext
+from data_platform.processing.policies.policy_result import PolicyResult
 
 
 class Policy(ABC):
@@ -25,7 +22,7 @@ class Policy(ABC):
     @abstractmethod
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
         """
         Evaluates the current execution context.
@@ -33,7 +30,7 @@ class Policy(ABC):
         Parameters
         ----------
         context:
-            Current execution context.
+            Current policy context.
 
         Returns
         -------

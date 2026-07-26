@@ -15,9 +15,6 @@ from data_platform.processing.core.execution_metadata import (
 from data_platform.processing.core.execution_status import (
     ExecutionStatus,
 )
-from data_platform.processing.core.pipeline import (
-    Pipeline,
-)
 from data_platform.processing.core.processing_context import (
     ProcessingContext,
 )
@@ -27,14 +24,11 @@ from data_platform.processing.core.stage import (
 from data_platform.processing.core.stage_result import (
     StageResult,
 )
-from data_platform.processing.events.hook_context import (
-    HookContext,
-)
-from data_platform.processing.events.hook_type import (
-    HookType,
-)
 from data_platform.processing.policies.policy import (
     Policy,
+)
+from data_platform.processing.policies.policy_context import (
+    PolicyContext,
 )
 from data_platform.processing.policies.policy_engine import (
     PolicyEngine,
@@ -66,29 +60,24 @@ class DummyPolicy(Policy):
 
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
 
         return PolicyResult()
 
 
-def create_pipeline() -> Pipeline:
-    return Pipeline(
-        id="pipeline",
-        name="Pipeline",
-        stages=(
-            DummyStage(
-                id="stage-1",
-                name="Dummy Stage",
-            ),
-        ),
+def create_stage() -> Stage:
+
+    return DummyStage(
+        id="stage-1",
+        name="Dummy Stage",
     )
 
 
-def create_context() -> HookContext:
-    return HookContext(
-        hook_type=HookType.BEFORE_PIPELINE,
-        pipeline=create_pipeline(),
+def create_context() -> PolicyContext:
+
+    return PolicyContext(
+        stage=create_stage(),
         processing_context=ProcessingContext(
             id="context-1",
             metadata=ExecutionMetadata(

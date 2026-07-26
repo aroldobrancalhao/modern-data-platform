@@ -15,9 +15,6 @@ from data_platform.processing.core.execution_metadata import (
 from data_platform.processing.core.execution_status import (
     ExecutionStatus,
 )
-from data_platform.processing.core.pipeline import (
-    Pipeline,
-)
 from data_platform.processing.core.processing_context import (
     ProcessingContext,
 )
@@ -27,14 +24,11 @@ from data_platform.processing.core.stage import (
 from data_platform.processing.core.stage_result import (
     StageResult,
 )
-from data_platform.processing.events.hook_context import (
-    HookContext,
-)
-from data_platform.processing.events.hook_type import (
-    HookType,
-)
 from data_platform.processing.policies.policy import (
     Policy,
+)
+from data_platform.processing.policies.policy_context import (
+    PolicyContext,
 )
 from data_platform.processing.policies.policy_manager import (
     PolicyManager,
@@ -61,17 +55,11 @@ class DummyStage(Stage):
         )
 
 
-def create_pipeline() -> Pipeline:
+def create_stage() -> Stage:
 
-    return Pipeline(
-        id="pipeline",
-        name="Pipeline",
-        stages=(
-            DummyStage(
-                id="stage",
-                name="Stage",
-            ),
-        ),
+    return DummyStage(
+        id="stage",
+        name="Stage",
     )
 
 
@@ -89,7 +77,7 @@ class ContinuePolicy(Policy):
 
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
 
         return PolicyResult()
@@ -99,7 +87,7 @@ class RetryPolicyStub(Policy):
 
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
 
         return PolicyResult(
@@ -111,7 +99,7 @@ class CancelPolicy(Policy):
 
     async def evaluate(
         self,
-        context: HookContext,
+        context: PolicyContext,
     ) -> PolicyResult:
 
         return PolicyResult(
@@ -121,11 +109,10 @@ class CancelPolicy(Policy):
         )
 
 
-def hook_context() -> HookContext:
+def policy_context() -> PolicyContext:
 
-    return HookContext(
-        hook_type=HookType.AFTER_STAGE,
-        pipeline=create_pipeline(),
+    return PolicyContext(
+        stage=create_stage(),
         processing_context=create_context(),
     )
 
@@ -135,7 +122,7 @@ async def test_should_return_default_result_when_no_policies() -> None:
     manager = PolicyManager()
 
     result = await manager.evaluate(
-        hook_context(),
+        policy_context(),
     )
 
     assert result.continue_execution is True
@@ -154,7 +141,7 @@ async def test_should_merge_retry_results() -> None:
     )
 
     result = await manager.evaluate(
-        hook_context(),
+        policy_context(),
     )
 
     assert result.continue_execution is True
@@ -172,7 +159,7 @@ async def test_should_stop_when_policy_cancels_pipeline() -> None:
     )
 
     result = await manager.evaluate(
-        hook_context(),
+        policy_context(),
     )
 
     assert result.continue_execution is False
