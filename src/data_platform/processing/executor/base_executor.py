@@ -142,6 +142,20 @@ class BaseExecutor(Executor, ABC):
             exception=exception,
         )
 
+    async def _execute_stage(
+        self,
+        stage: Stage,
+        context: ProcessingContext,
+    ) -> StageResult:
+        """
+        Executes a stage.
+
+        The default implementation simply delegates to the Stage.
+        Specialized executors may override this behavior.
+        """
+
+        return await stage.execute(context)
+
     async def _emit_before_stage(
         self,
         pipeline: Pipeline,

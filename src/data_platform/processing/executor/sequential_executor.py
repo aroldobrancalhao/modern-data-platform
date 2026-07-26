@@ -49,7 +49,10 @@ class SequentialExecutor(BaseExecutor):
 
                 try:
 
-                    result = await stage.execute(context)
+                    result = await self._execute_stage(
+                        stage=stage,
+                        context=context,
+                    )
 
                 except Exception as exc:
 

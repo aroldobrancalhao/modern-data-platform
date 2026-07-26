@@ -195,3 +195,64 @@ async def test_execute_returns_empty_stage_results_when_exception_occurs() -> No
     )
 
     assert result.stage_results == ()
+
+async def test_execute_stage_delegates_to_stage() -> None:
+    executor = SuccessfulExecutor()
+
+    stage = DummyStage(
+        id="stage-1",
+        name="Stage 1",
+    )
+
+    context = create_context()
+
+    result = await executor._execute_stage(
+        stage=stage,
+        context=context,
+    )
+
+    assert result.stage_id == stage.id
+    assert result.stage_name == stage.name
+    assert result.status == ExecutionStatus.COMPLETED
+
+
+async def test_execute_stage_preserves_metadata() -> None:
+    executor = SuccessfulExecutor()
+
+    context = create_context()
+
+    stage = DummyStage(
+        id="stage-1",
+        name="Stage 1",
+    )
+
+    result = await executor._execute_stage(
+        stage=stage,
+        context=context,
+    )
+
+    assert result.metadata is context.metadata
+
+
+async def test_execute_stage_propagates_stage_exception() -> None:
+
+    class FailingStage(Stage):
+        async def execute(
+            self,
+            context: ProcessingContext,
+        ) -> StageResult:
+            raise RuntimeError("boom")
+
+    executor = SuccessfulExecutor()
+
+    with pytest.raises(
+        RuntimeError,
+        match="boom",
+    ):
+        await executor._execute_stage(
+            stage=FailingStage(
+                id="stage-1",
+                name="Stage 1",
+            ),
+            context=create_context(),
+        )
