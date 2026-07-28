@@ -26,6 +26,8 @@ class Stage(Entity[str], ABC):
 
     name: str
 
+    max_attempts: int = 3
+
     @abstractmethod
     async def execute(
         self,

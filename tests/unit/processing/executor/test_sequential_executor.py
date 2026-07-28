@@ -1,5 +1,3 @@
-# PARTE 1/3
-
 """
 Modern Data Platform
 Processing Framework
@@ -20,8 +18,16 @@ from data_platform.processing.core.stage import Stage
 from data_platform.processing.core.stage_result import StageResult
 from data_platform.processing.events.hook_context import HookContext
 from data_platform.processing.events.hook_type import HookType
+from data_platform.processing.policies.failure_policy import FailurePolicy
+from data_platform.processing.policies.policy_manager import PolicyManager
 from data_platform.processing.executor.sequential_executor import (
     SequentialExecutor,
+)
+from data_platform.processing.runtime.execution_runtime import (
+    ExecutionKeys,
+)
+from data_platform.processing.core.context_keys.processing_keys import (
+    ProcessingKeys,
 )
 from data_platform.processing.hooks.hook import Hook
 
@@ -145,8 +151,6 @@ async def test_execute_multiple_stages_success() -> None:
     assert result.failed_stages == 0
     assert result.last_result is not None
     assert result.last_result.stage_id == "load"
-
-    # PARTE 2/3
 
 async def test_execute_stops_after_first_failure() -> None:
     executor = SequentialExecutor()
@@ -310,7 +314,6 @@ async def test_hooks_success_execution_order() -> None:
         HookType.AFTER_PIPELINE,
     ]
 
-    # PARTE 3/3
 
 async def test_hooks_stage_failure() -> None:
     executor = SequentialExecutor()
@@ -609,3 +612,231 @@ async def test_hooks_execute_in_registration_order() -> None:
         "B",
         "C",
     ]
+
+
+async def test_execution_runtime_marks_execution_completed() -> None:
+    executor = SequentialExecutor()
+
+    context = create_context()
+
+    pipeline = create_pipeline(
+        SuccessfulStage(
+            id="extract",
+            name="Extract",
+        ),
+    )
+
+    result = await executor.execute(
+        pipeline,
+        context,
+    )
+
+    assert result.status == ExecutionStatus.COMPLETED
+
+    assert (
+        context.get(ExecutionKeys.STATUS)
+        == ExecutionStatus.COMPLETED
+    )
+
+    assert context.contains(
+        ExecutionKeys.START_TIME,
+    )
+
+    assert context.contains(
+        ExecutionKeys.END_TIME,
+    )
+
+    assert context.contains(
+        ExecutionKeys.DURATION,
+    )
+
+
+async def test_execution_runtime_marks_execution_failed() -> None:
+    executor = SequentialExecutor()
+
+    context = create_context()
+
+    pipeline = create_pipeline(
+        ExceptionStage(
+            id="extract",
+            name="Extract",
+        ),
+    )
+
+    result = await executor.execute(
+        pipeline,
+        context,
+    )
+
+    assert result.status == ExecutionStatus.FAILED
+
+    assert (
+        context.get(ExecutionKeys.STATUS)
+        == ExecutionStatus.FAILED
+    )
+
+    assert context.contains(
+        ExecutionKeys.END_TIME,
+    )
+
+    assert context.contains(
+        ExecutionKeys.DURATION,
+    )
+
+    exception = context.get(
+        ProcessingKeys.EXCEPTION,
+    )
+
+    assert exception is not None
+
+
+async def test_current_stage_is_cleared_after_execution() -> None:
+    executor = SequentialExecutor()
+
+    context = create_context()
+
+    pipeline = create_pipeline(
+        SuccessfulStage(
+            id="extract",
+            name="Extract",
+        ),
+    )
+
+    await executor.execute(
+        pipeline,
+        context,
+    )
+
+    assert not context.contains(
+        ProcessingKeys.CURRENT_STAGE,
+    )
+
+
+# ============================================================================
+# Runtime integration
+# ============================================================================
+
+async def test_runtime_stores_stage_result() -> None:
+    executor = SequentialExecutor()
+
+    context = create_context()
+
+    pipeline = create_pipeline(
+        SuccessfulStage(
+            id="extract",
+            name="Extract",
+        ),
+    )
+
+    result = await executor.execute(
+        pipeline,
+        context,
+    )
+
+    assert (
+        context.get(
+            ProcessingKeys.STAGE_RESULT,
+        )
+        is result.last_result
+    )
+
+
+async def test_runtime_stores_max_attempts() -> None:
+    executor = SequentialExecutor()
+
+    context = create_context()
+
+    pipeline = create_pipeline(
+        SuccessfulStage(
+            id="extract",
+            name="Extract",
+            max_attempts=7,
+        ),
+    )
+
+    await executor.execute(
+        pipeline,
+        context,
+    )
+
+    assert (
+        context.get(
+            ProcessingKeys.MAX_ATTEMPTS,
+        )
+        == 7
+    )
+
+
+async def test_failure_policy_fail_fast_cancels_pipeline() -> None:
+    executor = SequentialExecutor(
+        policy_manager=PolicyManager(
+            (
+                FailurePolicy(
+                    fail_fast=True,
+                ),
+            ),
+        ),
+    )
+
+    pipeline = create_pipeline(
+        FailedStage(
+            id="extract",
+            name="Extract",
+        ),
+        SuccessfulStage(
+            id="load",
+            name="Load",
+        ),
+    )
+
+    result = await executor.execute(
+        pipeline,
+        create_context(),
+    )
+
+    assert result.status == ExecutionStatus.FAILED
+
+    assert result.total_stages == 1
+
+    assert result.failed_stages == 1
+
+    assert result.last_result is not None
+
+    assert result.last_result.stage_id == "extract"
+
+
+async def test_failure_policy_continue_execution() -> None:
+    executor = SequentialExecutor(
+        policy_manager=PolicyManager(
+            (
+                FailurePolicy(
+                    fail_fast=False,
+                ),
+            ),
+        ),
+    )
+
+    pipeline = create_pipeline(
+        FailedStage(
+            id="extract",
+            name="Extract",
+        ),
+        SuccessfulStage(
+            id="load",
+            name="Load",
+        ),
+    )
+
+    result = await executor.execute(
+        pipeline,
+        create_context(),
+    )
+
+    assert result.status == ExecutionStatus.FAILED
+
+    assert result.total_stages == 2
+    assert result.successful_stages == 1
+    assert result.failed_stages == 1
+
+    assert result.last_result is not None
+    assert result.last_result.stage_id == "load"

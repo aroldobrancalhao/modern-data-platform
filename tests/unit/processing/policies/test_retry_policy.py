@@ -3,98 +3,207 @@ Modern Data Platform
 Processing Framework
 
 Unit tests for RetryPolicy.
+
+Author: Modern Data Platform
+License: MIT
 """
 
 from __future__ import annotations
 
-import pytest
-
+from data_platform.processing.core.context_keys.processing_keys import (
+    ProcessingKeys,
+)
 from data_platform.processing.core.execution_metadata import (
     ExecutionMetadata,
+)
+from data_platform.processing.core.pipeline import (
+    Pipeline,
 )
 from data_platform.processing.core.processing_context import (
     ProcessingContext,
 )
-from data_platform.processing.core.execution_status import (
-    ExecutionStatus,
-)
 from data_platform.processing.core.stage import (
     Stage,
-)
-from data_platform.processing.core.stage_result import (
-    StageResult,
 )
 from data_platform.processing.policies.policy_context import (
     PolicyContext,
 )
-from data_platform.processing.policies.policy_result import (
-    PolicyResult,
+from data_platform.processing.policies.policy_event import (
+    PolicyEvent,
 )
 from data_platform.processing.policies.retry_policy import (
     RetryPolicy,
 )
 
+import pytest
+
 pytestmark = pytest.mark.anyio
 
 
 class DummyStage(Stage):
-
     async def execute(
         self,
         context: ProcessingContext,
-    ) -> StageResult:
-
-        return StageResult(
-            stage_id=self.id,
-            stage_name=self.name,
-            status=ExecutionStatus.COMPLETED,
-            metadata=context.metadata,
-        )
-
-
-def create_stage() -> Stage:
-
-    return DummyStage(
-        id="stage",
-        name="Stage",
-    )
+    ):
+        raise NotImplementedError
 
 
 def create_context() -> ProcessingContext:
-
     return ProcessingContext(
         id="context",
         metadata=ExecutionMetadata(
-            execution_id="execution",
+            execution_id="execution-1",
         ),
     )
 
 
-def create_policy_context() -> PolicyContext:
+def create_pipeline() -> Pipeline:
+    return Pipeline(
+        id="pipeline",
+        name="Pipeline",
+        stages=(
+            DummyStage(
+                id="stage",
+                name="Stage",
+            ),
+        ),
+    )
+
+
+def create_policy_context(
+    processing_context: ProcessingContext,
+    *,
+    event: PolicyEvent,
+) -> PolicyContext:
+    pipeline = create_pipeline()
 
     return PolicyContext(
-        stage=create_stage(),
-        processing_context=create_context(),
+        processing_context=processing_context,
+        pipeline=pipeline,
+        stage=pipeline.stages[0],
+        event=event,
     )
 
 
-async def test_should_return_default_policy_result() -> None:
+async def test_retry_allowed() -> None:
+    context = create_context()
+
+    context.set(
+        ProcessingKeys.CURRENT_ATTEMPT,
+        1,
+    )
+
+    context.set(
+        ProcessingKeys.MAX_ATTEMPTS,
+        3,
+    )
+
+    context.set(
+        ProcessingKeys.EXCEPTION,
+        RuntimeError("boom"),
+    )
 
     policy = RetryPolicy()
 
     result = await policy.evaluate(
-        create_policy_context(),
+        create_policy_context(
+            context,
+            event=PolicyEvent.STAGE_FAILED,
+        ),
     )
 
-    assert result == PolicyResult()
+    assert result.continue_execution is True
+    assert result.retry is True
+    assert result.cancel_pipeline is False
+    assert result.reason == "Retry allowed."
 
 
-async def test_should_not_request_retry_by_default() -> None:
+async def test_retry_not_allowed_when_attempts_are_exhausted() -> None:
+    context = create_context()
+
+    context.set(
+        ProcessingKeys.CURRENT_ATTEMPT,
+        3,
+    )
+
+    context.set(
+        ProcessingKeys.MAX_ATTEMPTS,
+        3,
+    )
+
+    context.set(
+        ProcessingKeys.EXCEPTION,
+        RuntimeError("boom"),
+    )
 
     policy = RetryPolicy()
 
     result = await policy.evaluate(
-        create_policy_context(),
+        create_policy_context(
+            context,
+            event=PolicyEvent.STAGE_FAILED,
+        ),
+    )
+
+    assert result.continue_execution is True
+    assert result.retry is False
+    assert result.cancel_pipeline is False
+    assert result.reason == "Maximum retry attempts reached."
+
+
+async def test_retry_is_ignored_without_exception() -> None:
+    context = create_context()
+
+    context.set(
+        ProcessingKeys.CURRENT_ATTEMPT,
+        1,
+    )
+
+    context.set(
+        ProcessingKeys.MAX_ATTEMPTS,
+        3,
+    )
+
+    policy = RetryPolicy()
+
+    result = await policy.evaluate(
+        create_policy_context(
+            context,
+            event=PolicyEvent.STAGE_FAILED,
+        ),
+    )
+
+    assert result.continue_execution is True
+    assert result.retry is False
+    assert result.cancel_pipeline is False
+    assert result.reason is None
+
+
+async def test_retry_is_ignored_for_other_events() -> None:
+    context = create_context()
+
+    context.set(
+        ProcessingKeys.CURRENT_ATTEMPT,
+        1,
+    )
+
+    context.set(
+        ProcessingKeys.MAX_ATTEMPTS,
+        3,
+    )
+
+    context.set(
+        ProcessingKeys.EXCEPTION,
+        RuntimeError("boom"),
+    )
+
+    policy = RetryPolicy()
+
+    result = await policy.evaluate(
+        create_policy_context(
+            context,
+            event=PolicyEvent.BEFORE_STAGE,
+        ),
     )
 
     assert result.continue_execution is True

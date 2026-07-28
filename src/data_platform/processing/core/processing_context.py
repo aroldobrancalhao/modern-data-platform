@@ -11,6 +11,7 @@ License: MIT
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from data_platform.processing.core.entity import Entity
@@ -25,35 +26,59 @@ class ProcessingContext(Entity[str]):
     The ProcessingContext stores the mutable execution state
     shared across every component participating in a pipeline
     execution.
+
+    Context values should preferably be addressed using the
+    ContextKeys enums. Plain strings remain supported for
+    backwards compatibility.
     """
 
     metadata: ExecutionMetadata
 
     _values: dict[str, Any] = field(default_factory=dict, init=False)
 
-    def set(self, key: str, value: Any) -> None:
+    @staticmethod
+    def _normalize_key(key: str | StrEnum) -> str:
+        """
+        Normalizes supported key types to their string value.
+        """
+        if isinstance(key, StrEnum):
+            return key.value
+
+        return key
+
+    def set(self, key: str | StrEnum, value: Any) -> None:
         """
         Stores a value in the execution context.
         """
-        self._values[key] = value
+        self._values[self._normalize_key(key)] = value
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(
+        self,
+        key: str | StrEnum,
+        default: Any = None,
+    ) -> Any:
         """
         Retrieves a value from the execution context.
         """
-        return self._values.get(key, default)
+        return self._values.get(
+            self._normalize_key(key),
+            default,
+        )
 
-    def remove(self, key: str) -> None:
+    def remove(self, key: str | StrEnum) -> None:
         """
         Removes a value from the context.
         """
-        self._values.pop(key, None)
+        self._values.pop(
+            self._normalize_key(key),
+            None,
+        )
 
-    def contains(self, key: str) -> bool:
+    def contains(self, key: str | StrEnum) -> bool:
         """
         Checks whether a key exists.
         """
-        return key in self._values
+        return self._normalize_key(key) in self._values
 
     def clear(self) -> None:
         """
@@ -64,6 +89,6 @@ class ProcessingContext(Entity[str]):
     @property
     def values(self) -> dict[str, Any]:
         """
-        Returns a read-only copy of the stored values.
+        Returns a copy of the stored values.
         """
         return self._values.copy()

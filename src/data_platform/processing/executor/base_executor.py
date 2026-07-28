@@ -8,8 +8,6 @@ Author: Modern Data Platform
 License: MIT
 """
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 
 from data_platform.processing.core.execution_status import ExecutionStatus
@@ -25,6 +23,12 @@ from data_platform.processing.executor.executor import Executor
 from data_platform.processing.hooks.hook import Hook
 from data_platform.processing.hooks.hook_manager import HookManager
 
+from data_platform.processing.policies.failure_policy import FailurePolicy
+from data_platform.processing.policies.policy_context import PolicyContext
+from data_platform.processing.policies.policy_event import PolicyEvent
+from data_platform.processing.policies.policy_manager import PolicyManager
+from data_platform.processing.policies.policy_result import PolicyResult
+
 
 class BaseExecutor(Executor, ABC):
     """
@@ -36,8 +40,21 @@ class BaseExecutor(Executor, ABC):
     are centralized here.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        policy_manager: PolicyManager | None = None,
+    ) -> None:
         self._hook_manager = HookManager()
+
+        self._policy_manager = (
+            policy_manager
+            if policy_manager is not None
+            else PolicyManager(
+                (
+                    FailurePolicy(),
+                )
+            )
+        )
 
     # ------------------------------------------------------------------
     # Hook registration
@@ -50,7 +67,6 @@ class BaseExecutor(Executor, ABC):
     ) -> None:
         """Register a hook for a lifecycle event."""
         self._hook_manager.register(hook_type, hook)
-    
 
     def register_hooks(
         self,
@@ -102,6 +118,49 @@ class BaseExecutor(Executor, ABC):
                 result=result,
                 exception=exception,
             )
+        )
+
+    def _build_policy_context(
+        self,
+        *,
+        processing_context: ProcessingContext,
+        pipeline: Pipeline,
+        event: PolicyEvent,
+        stage: Stage | None = None,
+    ) -> PolicyContext:
+        """
+        Creates the read model consumed by the Policy Engine.
+        """
+
+        return PolicyContext(
+            processing_context=processing_context,
+            pipeline=pipeline,
+            stage=stage,
+            event=event,
+        )
+
+
+    async def _evaluate_policies(
+        self,
+        *,
+        processing_context: ProcessingContext,
+        pipeline: Pipeline,
+        event: PolicyEvent,
+        stage: Stage | None = None,
+    ) -> PolicyResult:
+        """
+        Evaluates all registered execution policies.
+        """
+
+        policy_context = self._build_policy_context(
+            processing_context=processing_context,
+            pipeline=pipeline,
+            stage=stage,
+            event=event,
+        )
+
+        return await self._policy_manager.evaluate(
+            policy_context,
         )
 
     async def _emit_before_pipeline(

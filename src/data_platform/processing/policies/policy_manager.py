@@ -49,14 +49,12 @@ class PolicyManager:
         """
 
         continue_execution = True
-
         retry = False
-
         cancel_pipeline = False
-
         reason: str | None = None
 
         for policy in self._policies:
+
             result = await policy.evaluate(
                 context,
             )
@@ -66,7 +64,10 @@ class PolicyManager:
                 and result.continue_execution
             )
 
-            retry = retry or result.retry
+            retry = (
+                retry
+                or result.retry
+            )
 
             cancel_pipeline = (
                 cancel_pipeline
@@ -79,8 +80,17 @@ class PolicyManager:
             ):
                 reason = result.reason
 
+            #
+            # Cancellation has the highest priority.
+            #
             if cancel_pipeline:
-                break
+
+                return PolicyResult(
+                    continue_execution=False,
+                    retry=False,
+                    cancel_pipeline=True,
+                    reason=reason,
+                )
 
         return PolicyResult(
             continue_execution=continue_execution,

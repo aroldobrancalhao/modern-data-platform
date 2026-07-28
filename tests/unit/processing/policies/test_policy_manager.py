@@ -177,3 +177,62 @@ async def test_should_expose_registered_policies() -> None:
     )
 
     assert len(manager.policies) == 2
+
+
+class FirstReasonPolicy(Policy):
+
+    async def evaluate(
+        self,
+        context: PolicyContext,
+    ) -> PolicyResult:
+
+        return PolicyResult(
+            reason="First",
+        )
+
+
+class SecondReasonPolicy(Policy):
+
+    async def evaluate(
+        self,
+        context: PolicyContext,
+    ) -> PolicyResult:
+
+        return PolicyResult(
+            reason="Second",
+        )
+
+
+async def test_should_keep_first_reason() -> None:
+
+    manager = PolicyManager(
+        (
+            FirstReasonPolicy(),
+            SecondReasonPolicy(),
+        ),
+    )
+
+    result = await manager.evaluate(
+        policy_context(),
+    )
+
+    assert result.reason == "First"
+
+
+async def test_cancel_has_priority_over_retry() -> None:
+
+    manager = PolicyManager(
+        (
+            RetryPolicyStub(),
+            CancelPolicy(),
+        ),
+    )
+
+    result = await manager.evaluate(
+        policy_context(),
+    )
+
+    assert result.continue_execution is False
+    assert result.retry is False
+    assert result.cancel_pipeline is True
+    assert result.reason == "Cancelled"

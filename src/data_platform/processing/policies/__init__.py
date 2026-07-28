@@ -1,9 +1,6 @@
 from data_platform.processing.policies.policy_context import (
     PolicyContext,
 )
-from data_platform.processing.policies.policy_engine import (
-    PolicyEngine,
-)
 from data_platform.processing.policies.failure_policy import (
     FailurePolicy,
 )
@@ -25,7 +22,6 @@ from data_platform.processing.policies.timeout_policy import (
 
 __all__ = [
     "PolicyContext",
-    "PolicyEngine",
     "FailurePolicy",
     "Policy",
     "PolicyManager",

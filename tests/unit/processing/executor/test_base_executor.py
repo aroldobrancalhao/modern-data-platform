@@ -17,6 +17,11 @@ from data_platform.processing.core.processing_context import ProcessingContext
 from data_platform.processing.core.stage import Stage
 from data_platform.processing.core.stage_result import StageResult
 from data_platform.processing.executor.base_executor import BaseExecutor
+from data_platform.processing.policies.policy import Policy
+from data_platform.processing.policies.policy_context import PolicyContext
+from data_platform.processing.policies.policy_event import PolicyEvent
+from data_platform.processing.policies.policy_manager import PolicyManager
+from data_platform.processing.policies.policy_result import PolicyResult
 
 import pytest
 
@@ -256,3 +261,64 @@ async def test_execute_stage_propagates_stage_exception() -> None:
             ),
             context=create_context(),
         )
+
+
+class RetryPolicyStub(Policy):
+
+    async def evaluate(
+        self,
+        context: PolicyContext,
+    ) -> PolicyResult:
+
+        return PolicyResult(
+            retry=True,
+        )
+
+
+async def test_build_policy_context_should_preserve_values() -> None:
+
+    executor = SuccessfulExecutor()
+
+    pipeline = create_pipeline()
+    context = create_context()
+    stage = pipeline.stages[0]
+
+    policy_context = executor._build_policy_context(
+        processing_context=context,
+        pipeline=pipeline,
+        stage=stage,
+        event=PolicyEvent.STAGE_FAILED,
+    )
+
+    assert policy_context.processing_context is context
+    assert policy_context.pipeline is pipeline
+    assert policy_context.stage is stage
+    assert (
+        policy_context.event
+        == PolicyEvent.STAGE_FAILED
+    )
+
+
+async def test_evaluate_policies_should_delegate_to_policy_manager() -> None:
+
+    executor = SuccessfulExecutor(
+        policy_manager=PolicyManager(
+            (
+                RetryPolicyStub(),
+            ),
+        ),
+    )
+
+    pipeline = create_pipeline()
+    context = create_context()
+
+    result = await executor._evaluate_policies(
+        processing_context=context,
+        pipeline=pipeline,
+        event=PolicyEvent.STAGE_FAILED,
+        stage=pipeline.stages[0],
+    )
+
+    assert result.continue_execution is True
+    assert result.retry is True
+    assert result.cancel_pipeline is False
