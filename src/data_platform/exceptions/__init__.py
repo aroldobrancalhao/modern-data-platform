@@ -9,6 +9,17 @@ from .capability_error import (
     CapabilityError,
     CapabilityNotSupportedError,
 )
+from .remote_service_error import (
+    AuthenticationError,
+    AuthorizationError,
+    ConflictError,
+    RateLimitError,
+    RemoteServiceError,
+    RemoteTimeoutError,
+    ResourceNotFoundError,
+    ServiceUnavailableError,
+    ValidationError,
+)
 
 __all__ = [
     "PlatformException",
@@ -18,4 +29,13 @@ __all__ = [
     "ProviderAlreadyRegisteredError",
     "CapabilityError",
     "CapabilityNotSupportedError",
+    "RemoteServiceError",
+    "AuthenticationError",
+    "AuthorizationError",
+    "ResourceNotFoundError",
+    "ValidationError",
+    "ConflictError",
+    "RateLimitError",
+    "ServiceUnavailableError",
+    "RemoteTimeoutError",
 ]

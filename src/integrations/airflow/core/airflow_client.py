@@ -6,7 +6,11 @@ from data_platform.http import (
     HttpClient,
     HttpResponse,
 )
-from data_platform.http.http_error import HttpResponseError
+from data_platform.http.exception_mapper import HttpExceptionMapper
+from data_platform.http.http_error import (
+    HttpRequestError,
+    HttpResponseError,
+)
 
 from .airflow_context import AirflowContext
 
@@ -76,23 +80,40 @@ class AirflowClient:
                 **kwargs,
             )
 
-        except HttpResponseError as ex:
-
-            if ex.status_code != 401:
-                raise
+        except HttpResponseError as exception:
 
             #
             # JWT expired
             #
 
-            self._clear_authentication()
+            if exception.status_code == 401:
 
-            kwargs["headers"] = self._authorization_headers()
+                self._clear_authentication()
 
-            return self._http.request(
-                method,
-                path,
-                **kwargs)
+                kwargs["headers"] = self._authorization_headers()
+
+                try:
+
+                    return self._http.request(
+                        method,
+                        path,
+                        **kwargs,
+                    )
+
+                except (HttpRequestError, HttpResponseError) as retry_exception:
+                    raise HttpExceptionMapper.translate(
+                        retry_exception,
+                    ) from retry_exception
+
+            raise HttpExceptionMapper.translate(
+                exception,
+            ) from exception
+
+        except HttpRequestError as exception:
+
+            raise HttpExceptionMapper.translate(
+                exception,
+            ) from exception
 
     #
     # DAGs
@@ -150,16 +171,10 @@ class AirflowClient:
         run_id: str,
     ) -> HttpResponse:
 
-        response = self._request(
+        return self._request(
             "GET",
-            f"/api/v2/dags/{workflow_id}/dagRuns/{run_id}",
+            f"{self.API_PREFIX}/dags/{workflow_id}/dagRuns/{run_id}",
         )
-
-        print("\n===== AIRFLOW DAG RUN =====")
-        print(response.body)
-        print("===========================\n")
-
-        return response
 
     def cancel_dag_run(
         self,
