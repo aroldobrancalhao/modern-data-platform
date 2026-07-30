@@ -1,9 +1,9 @@
 from .airflow_workflow_provider import AirflowWorkflowProvider
-from .builder import AirflowBuilder
-from .mapper import AirflowMapper
+from .airflow_builder import AirflowWorkflowBuilder
+from .airflow_mapper import AirflowWorkflowMapper
 
 __all__ = (
     "AirflowWorkflowProvider",
-    "AirflowBuilder",
-    "AirflowMapper",
+    "AirflowWorkflowBuilder",
+    "AirflowWorkflowMapper",
 )

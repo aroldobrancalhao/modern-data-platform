@@ -10,7 +10,7 @@ from data_platform.workflow.models import (
 )
 
 
-class AirflowMapper:
+class AirflowWorkflowMapper:
     """
     Maps Airflow REST API models into platform workflow models.
     """

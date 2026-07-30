@@ -2,6 +2,8 @@ import time
 
 from data_platform.workflow.models import WorkflowStatus
 
+MAX_WAIT_SECONDS = 20
+
 
 def test_should_wait_until_run_is_finished(
     workflow_provider,
@@ -10,16 +12,16 @@ def test_should_wait_until_run_is_finished(
         "platform_validation",
     )
 
-    for _ in range(20):
+    for _ in range(MAX_WAIT_SECONDS):
 
         current = workflow_provider.get_run(
             "platform_validation",
-            run.id,
+            run.run_id,
         )
 
         if current.status in (
-            "success",
-            "failed",
+            WorkflowStatus.SUCCESS,
+            WorkflowStatus.FAILED,
         ):
             break
 

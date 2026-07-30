@@ -6,8 +6,8 @@ from data_platform.workflow import (
     WorkflowRun,
 )
 
-from ..core.airflow_client import AirflowClient
-from .mapper import AirflowMapper
+from integrations.airflow.core.airflow_client import AirflowClient
+from integrations.airflow.workflow.airflow_mapper import AirflowWorkflowMapper
 
 
 class AirflowWorkflowProvider(WorkflowProvider):
@@ -16,7 +16,6 @@ class AirflowWorkflowProvider(WorkflowProvider):
         self,
         client: AirflowClient,
     ) -> None:
-
         self._client = client
 
     #
@@ -29,7 +28,7 @@ class AirflowWorkflowProvider(WorkflowProvider):
 
         response = self._client.list_dags()
 
-        return AirflowMapper.to_workflows(
+        return AirflowWorkflowMapper.to_workflows(
             response.body,
         )
 
@@ -42,7 +41,7 @@ class AirflowWorkflowProvider(WorkflowProvider):
             workflow_id,
         )
 
-        return AirflowMapper.to_workflow(
+        return AirflowWorkflowMapper.to_workflow(
             response.body,
         )
 
@@ -65,7 +64,7 @@ class AirflowWorkflowProvider(WorkflowProvider):
             workflow_id,
         )
 
-        return AirflowMapper.to_workflow_run(
+        return AirflowWorkflowMapper.to_workflow_run(
             workflow_id=workflow.identifier,
             workflow_name=workflow.name,
             data=response.body,
@@ -84,7 +83,7 @@ class AirflowWorkflowProvider(WorkflowProvider):
             workflow_id,
         )
 
-        return AirflowMapper.to_workflow_runs(
+        return AirflowWorkflowMapper.to_workflow_runs(
             workflow_id=workflow.identifier,
             workflow_name=workflow.name,
             payload=response.body,
@@ -105,7 +104,7 @@ class AirflowWorkflowProvider(WorkflowProvider):
             run_id,
         )
 
-        return AirflowMapper.to_workflow_run(
+        return AirflowWorkflowMapper.to_workflow_run(
             workflow_id=workflow.identifier,
             workflow_name=workflow.name,
             data=response.body,

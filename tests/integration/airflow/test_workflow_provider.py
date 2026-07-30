@@ -24,7 +24,7 @@ def test_should_return_platform_validation_workflow(
         "platform_validation",
     )
 
-    assert workflow.id == "platform_validation"
+    assert workflow.identifier == "platform_validation"
 
 
 def test_should_trigger_workflow(
@@ -35,7 +35,7 @@ def test_should_trigger_workflow(
     )
 
     assert run.workflow_id == "platform_validation"
-    assert run.id is not None
+    assert run.run_id is not None
 
 
 def test_should_list_workflow_runs(
@@ -57,10 +57,10 @@ def test_should_get_workflow_run(
 
     loaded = workflow_provider.get_run(
         workflow_id="platform_validation",
-        run_id=run.id,
+        run_id=run.run_id,
     )
 
-    assert loaded.id == run.id
+    assert loaded.id == run.run_id
     assert loaded.workflow_id == run.workflow_id
 
 
@@ -73,7 +73,7 @@ def test_should_cancel_workflow(
 
     workflow_provider.cancel(
         workflow_id="platform_validation",
-        run_id=run.id,
+        run_id=run.run_id,
     )
 
     cancelled = workflow_provider.get_run(

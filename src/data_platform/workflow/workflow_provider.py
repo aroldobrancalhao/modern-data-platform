@@ -1,25 +1,33 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 
-from data_platform.workflow.models import Workflow, WorkflowRun
+from data_platform.contracts.base_provider import BaseProvider
+from data_platform.workflow.models import Workflow
+from data_platform.workflow.models import WorkflowRun
 
 
-class WorkflowProvider(ABC):
+class WorkflowProvider(BaseProvider):
     """
-    Defines the contract for workflow orchestration providers.
+    Contract implemented by workflow orchestration providers.
 
-    Implementations are responsible for interacting with the underlying
-    orchestration engine while exposing a provider-agnostic API.
+    A WorkflowProvider is responsible for interacting with workflow
+    orchestration engines (Airflow, Prefect, Dagster, etc.) while
+    exposing a provider-agnostic API.
     """
 
     @abstractmethod
-    def list_workflows(self) -> list[Workflow]:
+    def list_workflows(
+        self,
+    ) -> list[Workflow]:
         """
         Returns all available workflows.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def get_workflow(self, workflow_id: str) -> Workflow:
+    def get_workflow(
+        self,
+        workflow_id: str,
+    ) -> Workflow:
         """
         Returns a workflow by its identifier.
         """

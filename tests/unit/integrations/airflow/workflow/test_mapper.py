@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
+
 from data_platform.workflow.models import WorkflowStatus
 
-from integrations.airflow.workflow.mapper import AirflowMapper
+from integrations.airflow.workflow.airflow_mapper import AirflowWorkflowMapper
 
 
 def test_should_map_workflow() -> None:
@@ -12,7 +14,7 @@ def test_should_map_workflow() -> None:
         "description": "Daily ETL",
     }
 
-    workflow = AirflowMapper.to_workflow(payload)
+    workflow = AirflowWorkflowMapper.to_workflow(payload)
 
     assert workflow.identifier == "daily_sales"
     assert workflow.name == "Daily Sales"
@@ -25,7 +27,7 @@ def test_should_map_workflow_without_display_name() -> None:
         "description": None,
     }
 
-    workflow = AirflowMapper.to_workflow(payload)
+    workflow = AirflowWorkflowMapper.to_workflow(payload)
 
     assert workflow.identifier == "daily_sales"
     assert workflow.name == "daily_sales"
@@ -47,7 +49,7 @@ def test_should_map_workflow_run() -> None:
         },
     }
 
-    run = AirflowMapper.to_workflow_run(
+    run = AirflowWorkflowMapper.to_workflow_run(
         workflow_id="daily_sales",
         workflow_name="Daily Sales",
         data=payload,
@@ -85,7 +87,7 @@ def test_should_map_workflow_runs() -> None:
         ],
     }
 
-    runs = AirflowMapper.to_workflow_runs(
+    runs = AirflowWorkflowMapper.to_workflow_runs(
         workflow_id="daily_sales",
         workflow_name="Daily Sales",
         payload=payload,
@@ -95,3 +97,51 @@ def test_should_map_workflow_runs() -> None:
 
     assert runs[0].status is WorkflowStatus.RUNNING
     assert runs[1].status is WorkflowStatus.SUCCESS
+
+
+def test_should_map_unknown_status_to_pending() -> None:
+    payload = {
+        "dag_run_id": "manual__001",
+        "state": "unknown_status",
+        "conf": {},
+    }
+
+    run = AirflowWorkflowMapper.to_workflow_run(
+        workflow_id="daily_sales",
+        workflow_name="Daily Sales",
+        data=payload,
+    )
+
+    assert run.status is WorkflowStatus.PENDING
+
+
+def test_should_map_workflow_run_with_null_dates() -> None:
+    payload: dict[str, Any] = {
+        "dag_run_id": "manual__001",
+        "state": "queued",
+        "queued_at": None,
+        "start_date": None,
+        "end_date": None,
+        "logical_date": None,
+        "run_type": None,
+        "external_trigger": None,
+        "note": None,
+        "conf": {},
+    }
+
+    run = AirflowWorkflowMapper.to_workflow_run(
+        workflow_id="daily_sales",
+        workflow_name="Daily Sales",
+        data=payload,
+    )
+
+    assert run.status is WorkflowStatus.PENDING
+
+    assert run.queued_at is None
+    assert run.started_at is None
+    assert run.finished_at is None
+
+    assert run.metadata["logical_date"] is None
+    assert run.metadata["run_type"] is None
+    assert run.metadata["note"] is None
+    assert run.metadata["external_trigger"] is None
