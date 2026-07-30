@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from data_platform.models.compute import Workload
-from integrations.databricks.compute.client import DatabricksClient
+from integrations.databricks.core.databricks_client import DatabricksClient
 
 
 def test_should_execute_job() -> None:

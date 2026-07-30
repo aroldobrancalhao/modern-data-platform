@@ -1,7 +1,7 @@
 from data_platform.contracts.compute_provider import ComputeProvider
 from data_platform.providers.provider_builder import ProviderBuilder
 
-from integrations.databricks.compute.client import DatabricksClient
+from integrations.databricks.core.databricks_client import DatabricksClient
 from integrations.databricks.compute.databricks_compute_provider import (
     DatabricksComputeProvider,
 )
