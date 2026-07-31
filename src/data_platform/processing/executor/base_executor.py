@@ -28,6 +28,7 @@ from data_platform.processing.policies.policy_context import PolicyContext
 from data_platform.processing.policies.policy_event import PolicyEvent
 from data_platform.processing.policies.policy_manager import PolicyManager
 from data_platform.processing.policies.policy_result import PolicyResult
+from data_platform.processing.runtime.execution_runtime import ExecutionRuntime
 
 
 class BaseExecutor(Executor, ABC):
@@ -273,11 +274,14 @@ class BaseExecutor(Executor, ABC):
 
         stage_results: list[StageResult] = []
 
+        runtime = ExecutionRuntime(context)
+
         try:
 
             status = await self._execute_pipeline(
                 pipeline=pipeline,
                 context=context,
+                runtime=runtime,
                 stage_results=stage_results,
             )
 
@@ -285,7 +289,7 @@ class BaseExecutor(Executor, ABC):
 
                 last = stage_results[-1] if stage_results else None
 
-                return PipelineResult(
+                result = PipelineResult(
                     status=ExecutionStatus.FAILED,
                     metadata=context.metadata,
                     stage_results=tuple(stage_results),
@@ -293,15 +297,23 @@ class BaseExecutor(Executor, ABC):
                     error_message=last.error_message if last else None,
                 )
 
-            return PipelineResult(
+                runtime.pipeline_result(result)
+
+                return result
+
+            result = PipelineResult(
                 status=ExecutionStatus.COMPLETED,
                 metadata=context.metadata,
                 stage_results=tuple(stage_results),
             )
 
+            runtime.pipeline_result(result)
+
+            return result
+
         except Exception as exc:
 
-            return PipelineResult(
+            result = PipelineResult(
                 status=ExecutionStatus.FAILED,
                 metadata=context.metadata,
                 stage_results=tuple(stage_results),
@@ -309,16 +321,30 @@ class BaseExecutor(Executor, ABC):
                 error_message=str(exc),
             )
 
+            runtime.pipeline_result(result)
+
+            return result
+
     @abstractmethod
     async def _execute_pipeline(
         self,
         pipeline: Pipeline,
         context: ProcessingContext,
+        runtime: ExecutionRuntime,
         stage_results: list[StageResult],
     ) -> ExecutionStatus:
         """
         Executes the pipeline according to a concrete
         execution strategy.
+
+        Parameters
+        ----------
+        runtime:
+            The ExecutionRuntime instance created by ``execute()`` for
+            this run. Concrete executors MUST use this instance --
+            instead of creating their own -- so that stage-level and
+            pipeline-level state are synchronized through the same
+            writer.
 
         Returns
         -------

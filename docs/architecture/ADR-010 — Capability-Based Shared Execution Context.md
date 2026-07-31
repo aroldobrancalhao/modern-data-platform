@@ -209,7 +209,7 @@ The execution engine depends exclusively on capabilities.
 +-------------------------------+
                |
                |
-      Capability Contracts
+      Platform Contracts
                |
 +--------------+--------------+
 |              |              |
@@ -223,6 +223,10 @@ Dagster       ADLS       Spark Local
 ```
 
 This separation ensures that introducing a new technology does not require modifications to the execution engine.
+
+Provider implementations are resolved during platform bootstrap.
+
+Execution state is shared exclusively through the ProcessingContext.
 
 ---
 
@@ -334,7 +338,7 @@ It provides a single source of truth during pipeline execution while maintaining
 
 Unlike a generic dictionary, the ProcessingContext exposes a well-defined contract through strongly typed ContextKeys.
 
-Every component participating in the execution lifecycle may read or write information to the ProcessingContext, provided that the corresponding capability contract is respected.
+Every component participating in the execution lifecycle may read or write information to the ProcessingContext, provided that the corresponding Platform contract is respected.
 
 ---
 
@@ -356,6 +360,18 @@ The ProcessingContext is **not** responsible for:
 - provider-specific logic
 - dependency injection
 - service discovery
+
+---
+
+# Responsibility Separation
+
+The platform separates service resolution from execution state.
+
+ProviderRegistry is responsible for resolving provider implementations.
+
+ProcessingContext is responsible exclusively for sharing execution state.
+
+SequentialExecutor coordinates execution using both abstractions without coupling them together.
 
 ---
 
@@ -882,7 +898,7 @@ The internal file organization remains hidden from consumers.
 
 This decision establishes a stable execution vocabulary shared by the entire platform.
 
-Providers become responsible for translating product-specific concepts into capability contracts.
+Providers become responsible for translating product-specific concepts into Platform contracts.
 
 The runtime no longer depends on vendor terminology.
 
@@ -900,7 +916,7 @@ It depends exclusively on architectural capabilities.
                  Runtime
                     │
                     │
-         Capability Contracts
+            Platform Contracts
                     │
     ┌───────────────┼────────────────┐
     │               │                │
@@ -916,6 +932,26 @@ It depends exclusively on architectural capabilities.
 Every provider translates vendor-specific concepts into platform capabilities.
 
 The runtime never communicates directly with infrastructure products.
+
+---
+
+# Runtime Bootstrap
+
+The execution environment is assembled during platform bootstrap.
+
+The bootstrap process is responsible for:
+
+- creating the ProviderRegistry
+- registering provider implementations
+- creating the ProcessingContext
+- creating the execution runtime
+
+After initialization, the execution engine consumes only:
+
+- ProviderRegistry
+- ProcessingContext
+
+No execution component is responsible for service discovery or provider initialization.
 
 ---
 
@@ -1376,7 +1412,7 @@ Unity Catalog introduces additional governance concepts.
 
 Those remain internal to the provider.
 
-Only capability contracts become visible to the execution engine.
+Only Platform contracts become visible to the execution engine.
 
 ---
 
@@ -1509,7 +1545,7 @@ Dagster   Spark Local     GCS        Hive       Pub/Sub
 
 Every provider speaks the language of its own technology.
 
-Every provider translates that language into capability contracts.
+Every provider translates that language into Platform contracts.
 
 The execution engine understands only those contracts.
 
@@ -1574,7 +1610,7 @@ The following diagram summarizes the complete execution architecture.
 
 The execution runtime never communicates directly with any infrastructure product.
 
-Every interaction occurs through capability contracts.
+Every interaction occurs through Platform contracts.
 
 ---
 
@@ -1740,7 +1776,7 @@ Every new provider must conform to this vocabulary.
 
 This architecture introduces additional abstraction.
 
-Providers must translate infrastructure concepts into capability contracts.
+Providers must translate infrastructure concepts into Platform contracts.
 
 This requires slightly more implementation effort.
 
@@ -2053,7 +2089,7 @@ Prometheus
 
 The Modern Data Platform adopts a Capability-Based Shared Execution Context.
 
-Execution components communicate exclusively through strongly typed capability contracts.
+Execution components communicate exclusively through strongly typed Platform contracts.
 
 Infrastructure technologies remain isolated behind provider implementations.
 

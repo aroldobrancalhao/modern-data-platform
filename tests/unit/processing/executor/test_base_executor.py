@@ -17,6 +17,12 @@ from data_platform.processing.core.processing_context import ProcessingContext
 from data_platform.processing.core.stage import Stage
 from data_platform.processing.core.stage_result import StageResult
 from data_platform.processing.executor.base_executor import BaseExecutor
+from data_platform.processing.core.context_keys.processing_keys import (
+    ProcessingKeys,
+)
+from data_platform.processing.runtime.execution_runtime import (
+    ExecutionRuntime,
+)
 from data_platform.processing.policies.policy import Policy
 from data_platform.processing.policies.policy_context import PolicyContext
 from data_platform.processing.policies.policy_event import PolicyEvent
@@ -45,6 +51,7 @@ class SuccessfulExecutor(BaseExecutor):
         self,
         pipeline: Pipeline,
         context: ProcessingContext,
+        runtime: ExecutionRuntime,
         stage_results: list[StageResult],
     ) -> ExecutionStatus:
 
@@ -65,6 +72,7 @@ class FailedExecutor(BaseExecutor):
         self,
         pipeline: Pipeline,
         context: ProcessingContext,
+        runtime: ExecutionRuntime,
         stage_results: list[StageResult],
     ) -> ExecutionStatus:
 
@@ -87,6 +95,7 @@ class ExceptionExecutor(BaseExecutor):
         self,
         pipeline: Pipeline,
         context: ProcessingContext,
+        runtime: ExecutionRuntime,
         stage_results: list[StageResult],
     ) -> ExecutionStatus:
 
@@ -200,6 +209,72 @@ async def test_execute_returns_empty_stage_results_when_exception_occurs() -> No
     )
 
     assert result.stage_results == ()
+
+
+async def test_execute_persists_pipeline_result_in_context_on_success() -> None:
+    executor = SuccessfulExecutor()
+
+    context = create_context()
+
+    result = await executor.execute(
+        create_pipeline(),
+        context,
+    )
+
+    assert context.get(ProcessingKeys.PIPELINE_RESULT) is result
+
+
+async def test_execute_persists_pipeline_result_in_context_on_stage_failure() -> None:
+    executor = FailedExecutor()
+
+    context = create_context()
+
+    result = await executor.execute(
+        create_pipeline(),
+        context,
+    )
+
+    assert context.get(ProcessingKeys.PIPELINE_RESULT) is result
+
+
+async def test_execute_persists_pipeline_result_in_context_on_exception() -> None:
+    executor = ExceptionExecutor()
+
+    context = create_context()
+
+    result = await executor.execute(
+        create_pipeline(),
+        context,
+    )
+
+    assert context.get(ProcessingKeys.PIPELINE_RESULT) is result
+
+
+async def test_execute_pipeline_receives_shared_execution_runtime() -> None:
+    received: list[ExecutionRuntime] = []
+
+    class RuntimeCapturingExecutor(BaseExecutor):
+        async def _execute_pipeline(
+            self,
+            pipeline: Pipeline,
+            context: ProcessingContext,
+            runtime: ExecutionRuntime,
+            stage_results: list[StageResult],
+        ) -> ExecutionStatus:
+
+            received.append(runtime)
+
+            return ExecutionStatus.COMPLETED
+
+    executor = RuntimeCapturingExecutor()
+
+    await executor.execute(
+        create_pipeline(),
+        create_context(),
+    )
+
+    assert len(received) == 1
+    assert isinstance(received[0], ExecutionRuntime)
 
 async def test_execute_stage_delegates_to_stage() -> None:
     executor = SuccessfulExecutor()

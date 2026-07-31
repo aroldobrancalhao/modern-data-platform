@@ -33,10 +33,9 @@ class SequentialExecutor(BaseExecutor):
         self,
         pipeline: Pipeline,
         context: ProcessingContext,
+        runtime: ExecutionRuntime,
         stage_results: list[StageResult],
     ) -> ExecutionStatus:
-
-        runtime = ExecutionRuntime(context)
 
         runtime.execution_started()
 
