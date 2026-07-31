@@ -167,31 +167,35 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
             for partition in table.partitions
         ]
 
+        table_input: dict[str, Any] = {
+            "Name": table.name,
+            "StorageDescriptor": {
+                "Columns": columns,
+                "Location": str(table.location),
+                "InputFormat": (
+                    "org.apache.hadoop.mapred.TextInputFormat"
+                ),
+                "OutputFormat": (
+                    "org.apache.hadoop.hive.ql.io."
+                    "HiveIgnoreKeyTextOutputFormat"
+                ),
+                "SerdeInfo": {
+                    "SerializationLibrary": (
+                        "org.apache.hadoop.hive.serde2.lazy."
+                        "LazySimpleSerDe"
+                    ),
+                },
+            },
+            "PartitionKeys": partition_keys,
+            "TableType": "EXTERNAL_TABLE",
+        }
+
+        if table.description:
+            table_input["Description"] = table.description
+
         self._client.create_table(
             DatabaseName=table.database,
-            TableInput={
-                "Name": table.name,
-                "Description": table.description,
-                "StorageDescriptor": {
-                    "Columns": columns,
-                    "Location": str(table.location),
-                    "InputFormat": (
-                        "org.apache.hadoop.mapred.TextInputFormat"
-                    ),
-                    "OutputFormat": (
-                        "org.apache.hadoop.hive.ql.io."
-                        "HiveIgnoreKeyTextOutputFormat"
-                    ),
-                    "SerdeInfo": {
-                        "SerializationLibrary": (
-                            "org.apache.hadoop.hive.serde2.lazy."
-                            "LazySimpleSerDe"
-                        ),
-                    },
-                },
-                "PartitionKeys": partition_keys,
-                "TableType": "EXTERNAL_TABLE",
-            },
+            TableInput=table_input,
         )
 
     def get_table(
