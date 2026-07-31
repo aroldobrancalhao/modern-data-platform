@@ -27,9 +27,8 @@ class ProcessingContext(Entity[str]):
     shared across every component participating in a pipeline
     execution.
 
-    Context values should preferably be addressed using the
-    ContextKeys enums. Plain strings remain supported for
-    backwards compatibility.
+    Context values must be addressed using the ContextKeys enums
+    (StrEnum). Plain strings are not accepted as keys.
     """
 
     metadata: ExecutionMetadata
@@ -37,16 +36,13 @@ class ProcessingContext(Entity[str]):
     _values: dict[str, Any] = field(default_factory=dict, init=False)
 
     @staticmethod
-    def _normalize_key(key: str | StrEnum) -> str:
+    def _normalize_key(key: StrEnum) -> str:
         """
-        Normalizes supported key types to their string value.
+        Normalizes a ContextKeys member to its string value.
         """
-        if isinstance(key, StrEnum):
-            return key.value
+        return key.value
 
-        return key
-
-    def set(self, key: str | StrEnum, value: Any) -> None:
+    def set(self, key: StrEnum, value: Any) -> None:
         """
         Stores a value in the execution context.
         """
@@ -54,7 +50,7 @@ class ProcessingContext(Entity[str]):
 
     def get(
         self,
-        key: str | StrEnum,
+        key: StrEnum,
         default: Any = None,
     ) -> Any:
         """
@@ -65,7 +61,7 @@ class ProcessingContext(Entity[str]):
             default,
         )
 
-    def remove(self, key: str | StrEnum) -> None:
+    def remove(self, key: StrEnum) -> None:
         """
         Removes a value from the context.
         """
@@ -74,7 +70,7 @@ class ProcessingContext(Entity[str]):
             None,
         )
 
-    def contains(self, key: str | StrEnum) -> bool:
+    def contains(self, key: StrEnum) -> bool:
         """
         Checks whether a key exists.
         """

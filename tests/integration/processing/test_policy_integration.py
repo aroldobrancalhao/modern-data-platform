@@ -172,17 +172,22 @@ def register_all_hooks(
 
 
 # ----------------------------------------------------------------------
-# Default behavior (no PolicyManager supplied) stays fail-fast
+# Default behavior (no PolicyManager supplied): fail-fast on business
+# failures, retry-then-fail on raised exceptions
 # ----------------------------------------------------------------------
 
 
-class TestDefaultPolicyManagerIsFailFast:
+class TestDefaultPolicyManagerCombinesFailureAndRetry:
     """
-    BaseExecutor falls back to PolicyManager((FailurePolicy(),)) when
-    no PolicyManager is supplied. This section locks down that this
-    default preserves the pre-Policy-Engine behavior: the pipeline
-    stops on the very first failure, whether it is a raised
-    exception or a business-level failed StageResult.
+    BaseExecutor falls back to PolicyManager((FailurePolicy(),
+    RetryPolicy())) when no PolicyManager is supplied. This section
+    locks down that default: a business-level failure (a FAILED
+    StageResult with no exception) still stops the pipeline
+    immediately, per FailurePolicy's default fail_fast=True, while a
+    raised exception is retried automatically -- up to the failing
+    Stage's max_attempts -- before the pipeline is finally marked
+    FAILED. A Stage that fails on its first attempts and then
+    succeeds completes the pipeline instead of failing it.
     """
 
     async def test_stops_on_business_failure_without_configuring_any_policy(
@@ -205,33 +210,22 @@ class TestDefaultPolicyManagerIsFailFast:
         assert result.last_result is not None
         assert result.last_result.stage_id == "transform"
 
-    async def test_stops_on_raised_exception_without_configuring_any_policy(
+    async def test_recovers_from_a_transient_exception_by_retrying_up_to_max_attempts(
         self,
     ) -> None:
-        executor = SequentialExecutor()
+        """
+        Without configuring any PolicyManager, a Stage that raises on
+        its first attempts and succeeds afterwards is retried by
+        default -- not failed on the first exception.
+        """
 
-        pipeline = create_pipeline(
-            AlwaysRaisingStage(id="extract", name="Extract"),
-            SuccessfulStage(id="load", name="Load"),
-        )
-
-        result = await executor.execute(pipeline, create_context())
-
-        assert result.status == ExecutionStatus.FAILED
-        assert result.error_type == "ConnectionError"
-        assert result.error_message == "upstream service unavailable"
-        # The failing stage never produced a StageResult to append.
-        assert result.total_stages == 0
-
-    async def test_never_retries_a_raised_exception_without_retry_policy(
-        self,
-    ) -> None:
         executor = SequentialExecutor()
 
         flaky = FlakyStage(
             id="extract",
             name="Extract",
-            fail_times=1,
+            fail_times=2,
+            max_attempts=3,
         )
 
         result = await executor.execute(
@@ -239,8 +233,35 @@ class TestDefaultPolicyManagerIsFailFast:
             create_context(),
         )
 
+        assert result.status == ExecutionStatus.COMPLETED
+        assert flaky.calls == 3
+        assert result.total_stages == 1
+        assert result.stage_results[0].attempt == 3
+
+    async def test_eventually_fails_once_max_attempts_is_exhausted_without_configuring_any_policy(
+        self,
+    ) -> None:
+        executor = SequentialExecutor()
+
+        flaky = FlakyStage(
+            id="extract",
+            name="Extract",
+            fail_times=10,
+        )
+
+        pipeline = create_pipeline(
+            flaky,
+            SuccessfulStage(id="load", name="Load"),
+        )
+
+        result = await executor.execute(pipeline, create_context())
+
         assert result.status == ExecutionStatus.FAILED
-        assert flaky.calls == 1
+        assert flaky.calls == flaky.max_attempts
+        assert result.error_type == "TimeoutError"
+        # The failing stage never produced a StageResult to append,
+        # and the pipeline never reached the second stage.
+        assert result.total_stages == 0
 
 
 # ----------------------------------------------------------------------
@@ -878,13 +899,24 @@ class TestHooksObservePolicyDrivenFailures:
     async def test_stage_failed_hook_receives_the_exception_for_technical_failures(
         self,
     ) -> None:
+        """
+        max_attempts=1 pins this stage to a single attempt: the
+        default PolicyManager now includes RetryPolicy, which would
+        otherwise retry this raised exception and emit STAGE_FAILED
+        once per attempt.
+        """
+
         executor = SequentialExecutor()
 
         hook = RecordingHook()
         executor.register_hook(HookType.STAGE_FAILED, hook)
 
         pipeline = create_pipeline(
-            AlwaysRaisingStage(id="extract", name="Extract"),
+            AlwaysRaisingStage(
+                id="extract",
+                name="Extract",
+                max_attempts=1,
+            ),
         )
 
         await executor.execute(pipeline, create_context())

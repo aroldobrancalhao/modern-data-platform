@@ -352,6 +352,13 @@ async def test_hooks_stage_failure() -> None:
 
 
 async def test_hooks_exception() -> None:
+    """
+    max_attempts=1 pins this stage to a single attempt: the default
+    PolicyManager now includes RetryPolicy, which would otherwise
+    retry this raised exception and emit STAGE_FAILED once per
+    attempt -- this test is about hook dispatch shape, not retries.
+    """
+
     executor = SequentialExecutor()
 
     hook = RecordingHook()
@@ -363,6 +370,7 @@ async def test_hooks_exception() -> None:
         ExceptionStage(
             id="extract",
             name="Extract",
+            max_attempts=1,
         ),
     )
 
@@ -440,6 +448,7 @@ async def test_hook_receives_exception() -> None:
         ExceptionStage(
             id="extract",
             name="Extract",
+            max_attempts=1,
         ),
     )
 

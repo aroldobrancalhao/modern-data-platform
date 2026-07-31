@@ -10,6 +10,12 @@ License: MIT
 
 from __future__ import annotations
 
+from data_platform.processing.core.context_keys.execution_keys import (
+    ExecutionKeys,
+)
+from data_platform.processing.core.context_keys.processing_keys import (
+    ProcessingKeys,
+)
 from data_platform.processing.core.execution_metadata import ExecutionMetadata
 from data_platform.processing.core.processing_context import ProcessingContext
 
@@ -46,9 +52,9 @@ def test_set_and_get_value() -> None:
 
     context = create_context()
 
-    context.set("customer_id", 123)
+    context.set(ProcessingKeys.INPUT, 123)
 
-    assert context.get("customer_id") == 123
+    assert context.get(ProcessingKeys.INPUT) == 123
 
 
 def test_get_returns_default_when_key_does_not_exist() -> None:
@@ -58,8 +64,8 @@ def test_get_returns_default_when_key_does_not_exist() -> None:
 
     context = create_context()
 
-    assert context.get("missing") is None
-    assert context.get("missing", "default") == "default"
+    assert context.get(ProcessingKeys.INPUT) is None
+    assert context.get(ProcessingKeys.INPUT, "default") == "default"
 
 
 def test_contains_returns_true_for_existing_key() -> None:
@@ -69,9 +75,9 @@ def test_contains_returns_true_for_existing_key() -> None:
 
     context = create_context()
 
-    context.set("key", "value")
+    context.set(ProcessingKeys.INPUT, "value")
 
-    assert context.contains("key") is True
+    assert context.contains(ProcessingKeys.INPUT) is True
 
 
 def test_contains_returns_false_for_missing_key() -> None:
@@ -81,7 +87,7 @@ def test_contains_returns_false_for_missing_key() -> None:
 
     context = create_context()
 
-    assert context.contains("missing") is False
+    assert context.contains(ProcessingKeys.INPUT) is False
 
 
 def test_remove_existing_key() -> None:
@@ -91,11 +97,11 @@ def test_remove_existing_key() -> None:
 
     context = create_context()
 
-    context.set("key", "value")
+    context.set(ProcessingKeys.INPUT, "value")
 
-    context.remove("key")
+    context.remove(ProcessingKeys.INPUT)
 
-    assert context.contains("key") is False
+    assert context.contains(ProcessingKeys.INPUT) is False
     assert context.values == {}
 
 
@@ -106,7 +112,7 @@ def test_remove_missing_key_does_not_raise() -> None:
 
     context = create_context()
 
-    context.remove("missing")
+    context.remove(ProcessingKeys.INPUT)
 
     assert context.values == {}
 
@@ -118,8 +124,8 @@ def test_clear_removes_all_values() -> None:
 
     context = create_context()
 
-    context.set("a", 1)
-    context.set("b", 2)
+    context.set(ProcessingKeys.INPUT, 1)
+    context.set(ProcessingKeys.OUTPUT, 2)
 
     context.clear()
 
@@ -133,13 +139,13 @@ def test_values_returns_copy() -> None:
 
     context = create_context()
 
-    context.set("name", "Alice")
+    context.set(ExecutionKeys.STATUS, "Alice")
 
     values = context.values
 
-    values["name"] = "Bob"
+    values[ExecutionKeys.STATUS.value] = "Bob"
 
-    assert context.get("name") == "Alice"
+    assert context.get(ExecutionKeys.STATUS) == "Alice"
 
 
 def test_set_overwrites_existing_value() -> None:
@@ -149,7 +155,7 @@ def test_set_overwrites_existing_value() -> None:
 
     context = create_context()
 
-    context.set("key", "old")
-    context.set("key", "new")
+    context.set(ProcessingKeys.INPUT, "old")
+    context.set(ProcessingKeys.INPUT, "new")
 
-    assert context.get("key") == "new"
+    assert context.get(ProcessingKeys.INPUT) == "new"

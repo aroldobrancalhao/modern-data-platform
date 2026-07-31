@@ -28,6 +28,7 @@ from data_platform.processing.policies.policy_context import PolicyContext
 from data_platform.processing.policies.policy_event import PolicyEvent
 from data_platform.processing.policies.policy_manager import PolicyManager
 from data_platform.processing.policies.policy_result import PolicyResult
+from data_platform.processing.policies.retry_policy import RetryPolicy
 from data_platform.processing.runtime.execution_runtime import ExecutionRuntime
 
 
@@ -39,6 +40,14 @@ class BaseExecutor(Executor, ABC):
     execution strategy. Common concerns such as exception
     handling, PipelineResult creation and hook dispatching
     are centralized here.
+
+    When no PolicyManager is injected, the default composition is
+    PolicyManager((FailurePolicy(), RetryPolicy())): business-level
+    failures (a FAILED StageResult with no exception) still stop the
+    pipeline immediately, per FailurePolicy's default fail_fast=True,
+    while raised exceptions are retried automatically -- up to each
+    Stage's max_attempts -- before the pipeline is finally marked
+    FAILED.
     """
 
     def __init__(
@@ -53,6 +62,7 @@ class BaseExecutor(Executor, ABC):
             else PolicyManager(
                 (
                     FailurePolicy(),
+                    RetryPolicy(),
                 )
             )
         )
