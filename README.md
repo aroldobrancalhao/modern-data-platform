@@ -356,6 +356,33 @@ The local environment includes:
 - MinIO
 - Spark
 
+## Databricks authentication (local)
+
+`DatabricksComputeProvider` delegates authentication entirely to the
+official Databricks SDK credential chain (`~/.databrickscfg`,
+`DATABRICKS_HOST`/`DATABRICKS_TOKEN`, Azure CLI, etc). By default it
+doesn't force any profile, so it depends on either your local
+`~/.databrickscfg` having a `default_profile` set, or the
+`DATABRICKS_CONFIG_PROFILE` environment variable being exported in
+your shell -- this project's profile is `modern-data-platform`, not
+`DEFAULT`:
+
+```bash
+export DATABRICKS_CONFIG_PROFILE=modern-data-platform
+```
+
+To make the profile deterministic regardless of what your personal
+`~/.databrickscfg` resolves to (e.g. on a machine/CI runner without a
+`default_profile` set), pass it explicitly via `DatabricksSettings`
+instead of relying on the environment:
+
+```python
+from integrations.databricks.config.databricks_settings import DatabricksSettings
+from integrations.databricks.core.databricks_context import DatabricksContext
+
+context = DatabricksContext(DatabricksSettings(profile="modern-data-platform"))
+```
+
 ---
 
 # Documentation

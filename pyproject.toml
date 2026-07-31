@@ -46,6 +46,11 @@ testpaths = [
 pythonpath = [
     "src",
 ]
+markers = [
+    "real_aws: requires valid AWS credentials and network access",
+    "real_databricks: requires valid Databricks credentials and network access",
+]
+addopts = '-m "not real_aws and not real_databricks"'
 
 [tool.ruff]
 src = ["src"]

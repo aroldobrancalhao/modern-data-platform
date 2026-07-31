@@ -2,12 +2,22 @@ from functools import cached_property
 
 from databricks.sdk import WorkspaceClient
 
+from integrations.databricks.config.databricks_settings import (
+    DatabricksSettings,
+)
+
 
 class DatabricksContext:
 
+    def __init__(
+        self,
+        settings: DatabricksSettings | None = None,
+    ) -> None:
+        self._settings = settings or DatabricksSettings()
+
     @cached_property
     def workspace(self) -> WorkspaceClient:
-        return WorkspaceClient()
+        return WorkspaceClient(profile=self._settings.profile)
 
     @cached_property
     def jobs(self) -> dict[str, int]:
