@@ -13,6 +13,7 @@ dependencies = [
     "apache-airflow==3.0.4",
     "apache-airflow-providers-standard>=1.16.0",
     "boto3>=1.43.52",
+    "confluent-kafka>=2.15.0",
     "databricks-sdk>=0.122.0",
     "faker>=40.28.1",
     "httpx>=0.28.1",
@@ -49,8 +50,9 @@ pythonpath = [
 markers = [
     "real_aws: requires valid AWS credentials and network access",
     "real_databricks: requires valid Databricks credentials and network access",
+    "real_kafka: requires a reachable local Kafka broker (docker compose)",
 ]
-addopts = '-m "not real_aws and not real_databricks"'
+addopts = '-m "not real_aws and not real_databricks and not real_kafka"'
 
 [tool.ruff]
 src = ["src"]

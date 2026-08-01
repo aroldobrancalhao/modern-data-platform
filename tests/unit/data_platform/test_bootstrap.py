@@ -40,7 +40,13 @@ def test_bootstrap_registers_airflow_workflow_provider() -> None:
     assert registry.contains("airflow") is True
 
 
-def test_bootstrap_registers_exactly_the_four_expected_providers() -> None:
+def test_bootstrap_registers_kafka_messaging_provider() -> None:
+    registry = bootstrap()
+
+    assert registry.contains("kafka") is True
+
+
+def test_bootstrap_registers_exactly_the_five_expected_providers() -> None:
     registry = bootstrap()
 
     assert registry.providers() == (
@@ -48,4 +54,5 @@ def test_bootstrap_registers_exactly_the_four_expected_providers() -> None:
         "aws.glue",
         "aws.s3",
         "databricks",
+        "kafka",
     )

@@ -27,6 +27,11 @@ class PlatformSettings(BaseSettings):
         validation_alias="PLATFORM_WORKFLOW_PROVIDER",
     )
 
+    messaging_provider: str = Field(
+        default="kafka",
+        validation_alias="PLATFORM_MESSAGING_PROVIDER",
+    )
+
     model_config = SettingsConfigDict(
         extra="ignore",
     )
