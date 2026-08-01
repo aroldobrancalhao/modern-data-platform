@@ -1,36 +1,39 @@
-from typing import Any
+from __future__ import annotations
 
-dbutils: Any
+from pyspark.sql import SparkSession
+
 
 def get_parameter(
     name: str,
-    default: str = "",
-    required: bool = True,
-) -> str:
+    default: str | None = None,
+) -> str | None:
     """
-    Retrieves a Databricks notebook parameter.
+    Retrieves a Databricks notebook/Job parameter via dbutils.widgets.
 
-    Args:
-        name: Parameter name.
-        default: Default value shown in the widget.
-        required: Whether the parameter is mandatory.
+    ``pyspark.dbutils.DBUtils`` only exists inside the Databricks
+    Runtime's forked PySpark distribution -- it is not part of the
+    open-source PySpark package, so this can only actually run on a
+    real Databricks cluster. There is no local/offline equivalent to
+    exercise the real thing against; the unit test for this module
+    fakes ``pyspark.dbutils`` in ``sys.modules`` instead of skipping
+    coverage entirely.
 
-    Returns:
-        Parameter value.
-
-    Raises:
-        ValueError: If a required parameter is empty.
-        RuntimeError: If executed outside a Databricks notebook.
+    ``default=None`` means "no fallback" -- an unset widget returns
+    None instead of an empty string. Passing an explicit default
+    seeds the widget with that value, so the returned value is never
+    None in that case.
     """
-    try:
-        dbutils.widgets.text(name, default, name.title())
-        value = dbutils.widgets.get(name).strip()
-    except NameError as exc:
-        raise RuntimeError(
-            "This function must be executed inside a Databricks notebook."
-        ) from exc
+    from pyspark.dbutils import DBUtils  # type: ignore[import-not-found]
 
-    if required and not value:
-        raise ValueError(f"Parameter '{name}' is required.")
+    spark = SparkSession.getActiveSession()
+
+    dbutils = DBUtils(spark)
+
+    dbutils.widgets.text(name, default if default is not None else "")
+
+    value = dbutils.widgets.get(name)
+
+    if value == "" and default is None:
+        return None
 
     return value

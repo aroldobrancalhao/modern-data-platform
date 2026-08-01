@@ -52,12 +52,13 @@ from data_platform.processing.executor.sequential_executor import (
     SequentialExecutor,
 )
 from data_platform.providers.provider_factory import ProviderFactory
+from data_platform.storage.config import StorageSettings
 from data_platform.storage.models import StorageLocation
 from data_platform.storage.storage_provider import StorageProvider
 
 pytestmark = [pytest.mark.anyio, pytest.mark.real_aws]
 
-BUCKET = "mdp-datalake-dev-857854758128"
+BUCKET = StorageSettings().default_bucket
 
 
 @pytest.fixture

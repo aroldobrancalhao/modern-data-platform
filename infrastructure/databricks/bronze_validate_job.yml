@@ -1,0 +1,13 @@
+resources:
+  jobs:
+    bronze_validate:
+      name: Bronze Validate Pipeline
+
+      tasks:
+        - task_key: bronze_validate
+
+          notebook_task:
+            notebook_path: ../../notebooks/bronze/validate_bronze.ipynb
+
+            base_parameters:
+              entity: customers

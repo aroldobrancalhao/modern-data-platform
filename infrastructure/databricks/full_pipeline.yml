@@ -9,10 +9,26 @@ resources:
           run_job_task:
             job_id: ${resources.jobs.bronze.id}
 
-        - task_key: silver
+        - task_key: bronze_validate
 
           depends_on:
             - task_key: bronze
+
+          run_job_task:
+            job_id: ${resources.jobs.bronze_validate.id}
+
+        - task_key: bronze_optimize
+
+          depends_on:
+            - task_key: bronze_validate
+
+          run_job_task:
+            job_id: ${resources.jobs.bronze_optimize.id}
+
+        - task_key: silver
+
+          depends_on:
+            - task_key: bronze_optimize
 
           run_job_task:
             job_id: ${resources.jobs.silver.id}

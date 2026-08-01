@@ -38,6 +38,7 @@ dev = [
     "nbqa>=1.9.1",
     "types-pyyaml>=6.0.12.20260724",
     "pytest-cov>=7.1.0",
+    "delta-spark>=4.3.1",
 ]
 
 [tool.pytest.ini_options]
@@ -51,8 +52,9 @@ markers = [
     "real_aws: requires valid AWS credentials and network access",
     "real_databricks: requires valid Databricks credentials and network access",
     "real_kafka: requires a reachable local Kafka broker (docker compose)",
+    "spark_local: boots a real local SparkSession (~20-30s) -- no external infra required, excluded from the default suite for speed only",
 ]
-addopts = '-m "not real_aws and not real_databricks and not real_kafka"'
+addopts = '-m "not real_aws and not real_databricks and not real_kafka and not spark_local"'
 
 [tool.ruff]
 src = ["src"]
@@ -73,5 +75,7 @@ module = [
     "boto3",
     "botocore",
     "botocore.*",
+    "pyarrow",
+    "pyarrow.*",
 ]
 ignore_missing_imports = true

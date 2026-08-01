@@ -1,0 +1,13 @@
+resources:
+  jobs:
+    bronze_optimize:
+      name: Bronze Optimize Pipeline
+
+      tasks:
+        - task_key: bronze_optimize
+
+          notebook_task:
+            notebook_path: ../../notebooks/bronze/optimize_bronze.ipynb
+
+            base_parameters:
+              entity: customers

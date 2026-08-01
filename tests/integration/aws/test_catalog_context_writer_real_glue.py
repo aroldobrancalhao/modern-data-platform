@@ -54,12 +54,13 @@ from data_platform.processing.executor.sequential_executor import (
     SequentialExecutor,
 )
 from data_platform.providers.provider_factory import ProviderFactory
+from data_platform.storage.config import StorageSettings
 from data_platform.storage.models import StorageLocation
 
 pytestmark = [pytest.mark.anyio, pytest.mark.real_aws]
 
 DATABASE = "mdp_bronze_dev"
-BUCKET = "mdp-datalake-dev-857854758128"
+BUCKET = StorageSettings().default_bucket
 
 
 @dataclass(eq=False, slots=True, kw_only=True)
