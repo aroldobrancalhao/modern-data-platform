@@ -62,3 +62,30 @@ via a Databricks secret scope just to work around this.
 **Status**: the full pipeline (N1-N5) is implemented and tested in
 isolation, but the first real end-to-end Databricks run is blocked on
 this until the External Location is configured.
+
+## StorageLocation silently mistargets trailing-slash S3 keys
+
+`StorageLocation.__post_init__` normalizes `key` via
+`PurePosixPath(key).as_posix()`, which strips trailing slashes. S3
+"folder marker" objects (zero-byte keys that *do* end in `/`, e.g.
+Delta's own `bronze/customers/_delta_log/_staged_commits/`) are a
+distinct key from the same path without the slash. `list()` returns
+the real, slash-terminated key from S3, but building a
+`StorageLocation` from it (or passing it back into `delete()`) quietly
+drops the slash -- so the delete request goes to a key that doesn't
+exist, while the real object stays untouched, with no error raised.
+
+Found while cleaning `bronze/customers/`, `silver/customers/` and
+`gold/customers/` before a full_pipeline rerun: `S3StorageProvider.delete()`
+reported success (no exception) for the `_staged_commits/` marker in
+all three prefixes, but a follow-up `list()` still showed it present
+every time -- confirmed via `aws s3api list-object-versions` that the
+provider had been deleting `..._staged_commits` (no slash, never
+existed) instead of `..._staged_commits/` (the real key). Worked
+around this once via `aws s3 rm` directly on the slash-terminated key;
+not fixed in code yet.
+
+**Not corrected now**: small, isolated bug, doesn't block anything
+already built -- just needs `StorageLocation` (or `S3StorageProvider`)
+to preserve a trailing slash when one was present in the original key,
+instead of normalizing it away.
