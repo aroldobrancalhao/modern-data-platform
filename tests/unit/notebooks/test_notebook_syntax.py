@@ -28,11 +28,26 @@ NOTEBOOKS = (
 )
 
 
+def _strip_magics(source: str) -> str:
+    """
+    Drops IPython line magics (e.g. ``%pip install ...``) -- valid in
+    a real notebook kernel, not valid Python syntax on their own, so
+    `ast.parse` would reject them. This is a syntax lint, not an
+    executor: skipping the magic line is enough to still catch a
+    genuine typo/syntax error in the rest of the cell.
+    """
+    return "\n".join(
+        line
+        for line in source.splitlines()
+        if not line.lstrip().startswith("%")
+    )
+
+
 def _code_cells(notebook_path: Path) -> list[str]:
     notebook = json.loads(notebook_path.read_text())
 
     return [
-        "".join(cell["source"])
+        _strip_magics("".join(cell["source"]))
         for cell in notebook["cells"]
         if cell["cell_type"] == "code"
     ]
