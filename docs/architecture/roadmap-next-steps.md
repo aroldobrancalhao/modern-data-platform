@@ -29,28 +29,36 @@ Consumer" of the streaming flow described in ADR-0008) does not exist
 yet. It also depends on the simulator actually running, so there is
 real business data flowing through the Debezium topics to consume.
 
-## GoldCatalogRegistrationStage (Airflow-side Glue registration)
+## Databricks S3 access (Unity Catalog External Location)
 
-`publish_gold.ipynb` (N4) only writes the Gold Delta table -- it does
-not register it in the Glue Catalog. Databricks Free Edition has no
-AWS credential path available inside the notebook (no instance
-profile, no cross-account IAM role trust, no secret scope), and
-introducing a long-lived AWS access key just for this would break the
-project's "no static long-lived credentials" discipline (same reason
-there's no static `DATABRICKS_TOKEN`). Instead, after
-`full_pipeline.yml`'s `gold` task finishes, Airflow should trigger a
-`GoldCatalogRegistrationStage` -- same pattern as the existing
-`CatalogPublishingStage`/`GlueCatalogProvider` (already tested against
-real Glue, `real_aws` marker) -- that reads the Gold Delta table's
-schema and registers it, using the real local AWS credential chain
-Airflow already has today. Not implemented yet.
+**What's blocked**: any S3 read/write from inside the Databricks
+cluster (`read_raw`/`read_delta`/`write_delta`, every layer -- bronze,
+silver, gold) fails with `SparkException [UNAUTHORIZED_ACCESS]`,
+`credentials-provider: AnonymousAWSCredentials` -- the serverless
+cluster has no AWS credential reaching it at all.
 
-This also happens to help cloud portability rather than hurt it: the
-piece running inside Databricks (`read_delta`/`write_delta`, plain
-Spark over `s3://` URIs) is already cloud-neutral -- swapping the URI
-scheme (e.g. `gs://`) is enough. Keeping catalog registration outside
-the compute cluster means a future provider switch (AWS -> GCP) only
-swaps the concrete `CatalogProvider` (`GlueCatalogProvider` -> a
-future `BigQueryCatalogProvider`) behind the same
-`CatalogProvider`/`CatalogContextWriter` contract -- not a redesign of
-the flow.
+**Evidence**: run
+https://dbc-482c0db5-7f8e.cloud.databricks.com/?o=7474655351834045#job/353523406588616/run/850177561963079
+(task `bronze`, notebook `ingest_sources.ipynb`, line
+`raw_df.printSchema()`).
+
+**Technical lead**: the stacktrace shows
+`com.databricks.unity.UCSManager$.withTemporaryScope` -- external
+storage access in this workspace goes through Unity Catalog, not raw
+Hadoop S3A (`fs.s3a.access.key`). This suggests the correct fix is
+configuring a Unity Catalog External Location + Storage Credential
+pointing at `mdp-datalake-dev-857854758128` -- not an environment
+variable or a loose key.
+
+**Why this isn't code**: this is Databricks workspace infrastructure
+configuration (workspace admin console, or a
+`databricks_external_location`/`databricks_storage_credential`
+Terraform resource if we want it versioned) -- not something fixable
+by changing `src/` or the notebooks alone.
+
+**Deliberately not done**: same call as N4 -- no long-lived AWS key
+via a Databricks secret scope just to work around this.
+
+**Status**: the full pipeline (N1-N5) is implemented and tested in
+isolation, but the first real end-to-end Databricks run is blocked on
+this until the External Location is configured.

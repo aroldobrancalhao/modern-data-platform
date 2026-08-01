@@ -25,3 +25,7 @@ output "gold_database" {
 output "athena_workgroup" {
   value = module.athena.workgroup_name
 }
+
+output "databricks_uc_role_arn" {
+  value = aws_iam_role.databricks_uc.arn
+}

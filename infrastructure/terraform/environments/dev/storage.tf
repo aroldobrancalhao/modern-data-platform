@@ -38,7 +38,9 @@ data "aws_iam_policy_document" "datalake" {
     effect = "Allow"
 
     actions = [
-      "s3:ListBucket"
+      "s3:ListBucket",
+      "s3:GetBucketLocation",
+      "s3:ListBucketMultipartUploads"
     ]
 
     resources = [
@@ -55,7 +57,9 @@ data "aws_iam_policy_document" "datalake" {
     actions = [
       "s3:GetObject",
       "s3:PutObject",
-      "s3:DeleteObject"
+      "s3:DeleteObject",
+      "s3:ListMultipartUploadParts",
+      "s3:AbortMultipartUpload"
     ]
 
     resources = [
