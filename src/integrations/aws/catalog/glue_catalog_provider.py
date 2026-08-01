@@ -18,6 +18,18 @@ from data_platform.types import PlatformProvider
 
 from integrations.aws.core.aws_context import AwsContext
 
+_DELTA_INPUT_FORMAT = "org.apache.hadoop.mapred.SequenceFileInputFormat"
+_DELTA_OUTPUT_FORMAT = (
+    "org.apache.hadoop.hive.ql.io.HiveSequenceFileOutputFormat"
+)
+_DELTA_SERDE = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
+
+_GENERIC_INPUT_FORMAT = "org.apache.hadoop.mapred.TextInputFormat"
+_GENERIC_OUTPUT_FORMAT = (
+    "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+)
+_GENERIC_SERDE = "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
+
 
 class GlueCatalogProvider(BaseProvider, CatalogProvider):
     """
@@ -167,28 +179,52 @@ class GlueCatalogProvider(BaseProvider, CatalogProvider):
             for partition in table.partitions
         ]
 
+        location = str(table.location)
+
+        if table.table_format == "delta":
+
+            storage_descriptor: dict[str, Any] = {
+                "Columns": columns,
+                "Location": location,
+                "InputFormat": _DELTA_INPUT_FORMAT,
+                "OutputFormat": _DELTA_OUTPUT_FORMAT,
+                "SerdeInfo": {
+                    "SerializationLibrary": _DELTA_SERDE,
+                    "Parameters": {
+                        "serialization.format": "1",
+                        "path": location,
+                    },
+                },
+            }
+
+            table_parameters: dict[str, str] = {
+                "table_type": "DELTA",
+                "spark.sql.sources.provider": "delta",
+            }
+
+        else:
+
+            storage_descriptor = {
+                "Columns": columns,
+                "Location": location,
+                "InputFormat": _GENERIC_INPUT_FORMAT,
+                "OutputFormat": _GENERIC_OUTPUT_FORMAT,
+                "SerdeInfo": {
+                    "SerializationLibrary": _GENERIC_SERDE,
+                },
+            }
+
+            table_parameters = {}
+
         table_input: dict[str, Any] = {
             "Name": table.name,
-            "StorageDescriptor": {
-                "Columns": columns,
-                "Location": str(table.location),
-                "InputFormat": (
-                    "org.apache.hadoop.mapred.TextInputFormat"
-                ),
-                "OutputFormat": (
-                    "org.apache.hadoop.hive.ql.io."
-                    "HiveIgnoreKeyTextOutputFormat"
-                ),
-                "SerdeInfo": {
-                    "SerializationLibrary": (
-                        "org.apache.hadoop.hive.serde2.lazy."
-                        "LazySimpleSerDe"
-                    ),
-                },
-            },
+            "StorageDescriptor": storage_descriptor,
             "PartitionKeys": partition_keys,
             "TableType": "EXTERNAL_TABLE",
         }
+
+        if table_parameters:
+            table_input["Parameters"] = table_parameters
 
         if table.description:
             table_input["Description"] = table.description

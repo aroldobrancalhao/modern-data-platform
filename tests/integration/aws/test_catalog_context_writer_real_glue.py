@@ -138,6 +138,7 @@ def table(
         columns=[
             CatalogColumn(name="id", type="string"),
         ],
+        table_format="generic",
     )
 
     try:

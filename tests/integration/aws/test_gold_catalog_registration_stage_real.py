@@ -37,6 +37,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
+import boto3
 import pytest
 from pyspark.sql import Row, SparkSession
 
@@ -225,6 +226,23 @@ async def test_gold_delta_table_is_registered_in_the_real_glue_catalog(
             ("customer_id", "bigint"),
             ("name", "string"),
         ]
+
+        glue_table = boto3.client(
+            "glue", region_name="sa-east-1"
+        ).get_table(DatabaseName=DATABASE, Name=entity)["Table"]
+
+        storage_descriptor = glue_table["StorageDescriptor"]
+        assert storage_descriptor["InputFormat"] == (
+            "org.apache.hadoop.mapred.SequenceFileInputFormat"
+        )
+        assert storage_descriptor["SerdeInfo"]["Parameters"]["path"] == (
+            f"s3://{BUCKET}/gold/{entity}"
+        )
+        assert glue_table["Parameters"]["table_type"] == "DELTA"
+        assert (
+            glue_table["Parameters"]["spark.sql.sources.provider"]
+            == "delta"
+        )
 
     finally:
         if catalog_provider.table_exists(DATABASE, entity):

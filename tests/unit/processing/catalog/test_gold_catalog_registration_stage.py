@@ -288,6 +288,7 @@ async def test_registers_the_table_and_publishes_catalog_context() -> None:
         ("customer_id", "bigint"),
         ("name", "string"),
     ]
+    assert table.table_format == "delta"
 
     assert context.get(CatalogKeys.DATABASE) == DATABASE
     assert context.get(CatalogKeys.TABLE) == ENTITY

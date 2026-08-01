@@ -126,6 +126,7 @@ class GoldCatalogRegistrationStage(Stage):
                 )
                 for field in schema["fields"]
             ],
+            table_format="delta",
         )
 
         catalog_provider = cast(
