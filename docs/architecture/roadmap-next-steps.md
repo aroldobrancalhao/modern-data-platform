@@ -89,3 +89,22 @@ not fixed in code yet.
 already built -- just needs `StorageLocation` (or `S3StorageProvider`)
 to preserve a trailing slash when one was present in the original key,
 instead of normalizing it away.
+
+## dbt-athena `s3_data_naming = schema_table` has no atomic swap on rebuild
+
+`dbt/`'s Athena profile uses `s3_data_naming: schema_table` (fixed path
+per table, `gold/{schema}/{table}/`) rather than one of the `_unique`
+variants. This means a rebuild (`dbt run --full-refresh`, or any
+`table` materialization) overwrites the same S3 location in place --
+no atomic table-location swap, so a concurrent reader could see
+inconsistent data mid-rebuild. Accepted deliberately for now: matches
+the same overwrite-in-place model already used on the Spark side
+(`write_delta(..., mode="overwrite")`), and nothing in this pipeline
+today has a concurrent-read requirement during a rebuild window.
+
+**Revisit if**: a concurrent consumer sensitive to mid-rebuild
+inconsistency shows up -- e.g. a scheduled Power BI refresh querying
+Gold while a `dbt run` is in flight. At that point, switch to
+`schema_table_unique` (atomic swap, per dbt-athena's docs), accepting
+its trade-off of orphaned S3 directories from old rebuilds needing
+periodic cleanup.
