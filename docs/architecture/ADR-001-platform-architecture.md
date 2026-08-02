@@ -87,6 +87,12 @@ Cloud providers remain implementation details.
                            Analytics & BI
 ```
 
+> **Superseded by ADR-011**: the `Gold` branch shown here as
+> Databricks/Spark output feeding into dbt is no longer accurate.
+> Per ADR-011, Databricks/Spark's responsibility ends at Silver; dbt
+> reads Silver (via the Glue Catalog) and produces Gold itself. The
+> rest of this diagram (Simulator through Silver) is unaffected.
+
 ---
 
 # Architectural Layers
@@ -217,6 +223,12 @@ Responsibilities:
 - Data enrichment
 - Validation
 - Data quality
+
+> **Superseded by ADR-011** for Gold specifically: Aggregations/Data
+> enrichment at the Gold layer are now dbt's responsibility, not
+> Databricks/Spark's -- Databricks/Spark's processing responsibility
+> ends at Silver. ETL/ELT/Validation/Data quality at Bronze/Silver are
+> unaffected.
 
 Processing must remain independent of cloud providers.
 

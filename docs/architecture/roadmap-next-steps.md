@@ -74,3 +74,19 @@ Gold while a `dbt run` is in flight. At that point, switch to
 `schema_table_unique` (atomic swap, per dbt-athena's docs), accepting
 its trade-off of orphaned S3 directories from old rebuilds needing
 periodic cleanup.
+
+## `src/` top-level module structure has no single source of truth
+
+ADR-001 and ADR-004 (both dated 2026-07-19) each describe a different
+`src/` module list -- ADR-001: `platform/ingestion/streaming/processing/
+quality/simulator/common`; ADR-004: `platform/cloud/ingestion/streaming/
+processing/quality/orchestration/analytics/common`. Neither matches the
+real code: the actual top-level packages today are `common/
+data_platform/ingestion/integrations/quality/simulator/streaming`
+(`platform` became `data_platform`, `cloud` became `integrations`),
+and that rename was never captured in an ADR.
+
+**Not written now**: needs a new ADR reconciling the real structure
+against both ADR-001 and ADR-004, not a quick edit to either -- found
+while auditing all 11 ADRs for staleness, deliberately out of scope
+for that pass.
