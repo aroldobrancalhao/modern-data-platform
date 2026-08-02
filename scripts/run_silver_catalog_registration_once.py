@@ -1,15 +1,15 @@
 """
 Modern Data Platform
 
-One-off script: runs GoldCatalogRegistrationStage once against the
-real Gold Delta table (gold/customers/) and the real Glue Catalog
-(mdp_gold_dev), on the Airflow side -- the real local AWS credential
+One-off script: runs SilverCatalogRegistrationStage once against the
+real Silver Delta table (silver/customers/) and the real Glue Catalog
+(mdp_silver_dev), on the Airflow side -- the real local AWS credential
 chain already works here, unlike inside the Databricks cluster (see
 docs/architecture/roadmap-next-steps.md).
 
 Run with:
 
-    uv run python scripts/run_gold_catalog_registration_once.py
+    uv run python scripts/run_silver_catalog_registration_once.py
 
 Author: Modern Data Platform
 License: MIT
@@ -21,8 +21,8 @@ import asyncio
 
 from data_platform.bootstrap import bootstrap
 from data_platform.config.settings import Settings
-from data_platform.processing.catalog.gold_catalog_registration_stage import (
-    GoldCatalogRegistrationStage,
+from data_platform.processing.catalog.silver_catalog_registration_stage import (
+    SilverCatalogRegistrationStage,
 )
 from data_platform.processing.core.context_keys.catalog_keys import (
     CatalogKeys,
@@ -41,7 +41,7 @@ from data_platform.processing.executor.sequential_executor import (
 from data_platform.providers.provider_factory import ProviderFactory
 
 ENTITY = "customers"
-DATABASE = "mdp_gold_dev"
+DATABASE = "mdp_silver_dev"
 
 
 async def main() -> None:
@@ -50,9 +50,9 @@ async def main() -> None:
         settings=Settings(),
     )
 
-    stage = GoldCatalogRegistrationStage(
-        id="register-gold-customers-once",
-        name="Register Gold Customers (one-off)",
+    stage = SilverCatalogRegistrationStage(
+        id="register-silver-customers-once",
+        name="Register Silver Customers (one-off)",
         storage_provider_name="aws.s3",
         catalog_provider_name="aws.glue",
         entity=ENTITY,
@@ -61,15 +61,15 @@ async def main() -> None:
     )
 
     pipeline = Pipeline(
-        id="gold-catalog-registration-once",
-        name="Gold Catalog Registration (one-off)",
+        id="silver-catalog-registration-once",
+        name="Silver Catalog Registration (one-off)",
         stages=(stage,),
     )
 
     context = ProcessingContext(
-        id="context-gold-catalog-registration-once",
+        id="context-silver-catalog-registration-once",
         metadata=ExecutionMetadata(
-            execution_id="execution-gold-catalog-registration-once",
+            execution_id="execution-silver-catalog-registration-once",
         ),
     )
 

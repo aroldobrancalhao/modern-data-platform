@@ -2,10 +2,10 @@
 Modern Data Platform
 Processing Framework
 
-Real-AWS smoke test for GoldCatalogRegistrationStage.
+Real-AWS smoke test for SilverCatalogRegistrationStage.
 
 Proves the Stage closes end to end against the actual provisioned
-Glue database (mdp_gold_dev, sa-east-1) and a real S3StorageProvider/
+Glue database (mdp_silver_dev, sa-east-1) and a real S3StorageProvider/
 GlueCatalogProvider -- not fakes.
 
 Writing a Delta table directly to `s3://` via local Spark would need
@@ -24,7 +24,7 @@ manually, same discipline as the other spark_local tests -- stop the
 local docker compose stack first (WSL memory pressure/OOM risk):
 
     docker compose -f infrastructure/docker/docker-compose.yml stop
-    uv run pytest tests/integration/aws/test_gold_catalog_registration_stage_real.py -m "real_aws and spark_local" -v
+    uv run pytest tests/integration/aws/test_silver_catalog_registration_stage_real.py -m "real_aws and spark_local" -v
 
 Author: Modern Data Platform
 License: MIT
@@ -46,8 +46,8 @@ from data_platform.catalog import CatalogProvider
 from data_platform.compute.delta_io import write_delta
 from data_platform.compute.spark import get_spark
 from data_platform.config.settings import Settings
-from data_platform.processing.catalog.gold_catalog_registration_stage import (
-    GoldCatalogRegistrationStage,
+from data_platform.processing.catalog.silver_catalog_registration_stage import (
+    SilverCatalogRegistrationStage,
 )
 from data_platform.processing.core.context_keys.catalog_keys import (
     CatalogKeys,
@@ -78,13 +78,13 @@ pytestmark = [
     pytest.mark.spark_local,
 ]
 
-DATABASE = "mdp_gold_dev"
+DATABASE = "mdp_silver_dev"
 BUCKET = StorageSettings().default_bucket
 
 
 @pytest.fixture(scope="module")
 def spark() -> Iterator[SparkSession]:
-    session = get_spark("gold-catalog-registration-real-aws-test")
+    session = get_spark("silver-catalog-registration-real-aws-test")
 
     try:
         yield session
@@ -128,13 +128,13 @@ def entity(
 ) -> Iterator[str]:
     """
     Writes a small real Delta table locally, then uploads only its
-    _delta_log/*.json commit files to the real Gold prefix for this
+    _delta_log/*.json commit files to the real Silver prefix for this
     smoke test's entity -- see module docstring for why.
     """
 
     entity_name = f"_smoke_test_{uuid.uuid4().hex}"
 
-    local_path = tmp_path / "gold_table"
+    local_path = tmp_path / "silver_table"
 
     df = spark.createDataFrame(
         [
@@ -145,17 +145,17 @@ def entity(
 
     write_delta(df, str(local_path), mode="overwrite")
 
-    gold_location = StorageLocation.from_uri(
-        StorageConfig.gold(entity_name)
+    silver_location = StorageLocation.from_uri(
+        StorageConfig.silver(entity_name)
     )
 
     uploaded_keys: list[str] = []
 
     for commit_file in sorted((local_path / "_delta_log").glob("*.json")):
         location = StorageLocation(
-            scheme=gold_location.scheme,
-            bucket=gold_location.bucket,
-            key=f"{gold_location.key}/_delta_log/{commit_file.name}",
+            scheme=silver_location.scheme,
+            bucket=silver_location.bucket,
+            key=f"{silver_location.key}/_delta_log/{commit_file.name}",
         )
         storage_provider.upload(location, commit_file)
         uploaded_keys.append(location.key)
@@ -166,8 +166,8 @@ def entity(
         for key in uploaded_keys:
             storage_provider.delete(
                 StorageLocation(
-                    scheme=gold_location.scheme,
-                    bucket=gold_location.bucket,
+                    scheme=silver_location.scheme,
+                    bucket=silver_location.bucket,
                     key=key,
                 )
             )
@@ -175,21 +175,21 @@ def entity(
 
 def create_context() -> ProcessingContext:
     return ProcessingContext(
-        id="context-real-gold-catalog-registration",
+        id="context-real-silver-catalog-registration",
         metadata=ExecutionMetadata(
-            execution_id="execution-real-gold-catalog-registration",
+            execution_id="execution-real-silver-catalog-registration",
         ),
     )
 
 
-async def test_gold_delta_table_is_registered_in_the_real_glue_catalog(
+async def test_silver_delta_table_is_registered_in_the_real_glue_catalog(
     catalog_provider: CatalogProvider,
     provider_factory: ProviderFactory,
     entity: str,
 ) -> None:
-    stage = GoldCatalogRegistrationStage(
-        id="register-gold-smoke-test",
-        name="Register Gold Smoke Test",
+    stage = SilverCatalogRegistrationStage(
+        id="register-silver-smoke-test",
+        name="Register Silver Smoke Test",
         storage_provider_name="aws.s3",
         catalog_provider_name="aws.glue",
         entity=entity,
@@ -198,8 +198,8 @@ async def test_gold_delta_table_is_registered_in_the_real_glue_catalog(
     )
 
     pipeline = Pipeline(
-        id="gold-catalog-registration-smoke-test",
-        name="Gold Catalog Registration Smoke Test",
+        id="silver-catalog-registration-smoke-test",
+        name="Silver Catalog Registration Smoke Test",
         stages=(stage,),
     )
 
@@ -236,7 +236,7 @@ async def test_gold_delta_table_is_registered_in_the_real_glue_catalog(
             "org.apache.hadoop.mapred.SequenceFileInputFormat"
         )
         assert storage_descriptor["SerdeInfo"]["Parameters"]["path"] == (
-            f"s3://{BUCKET}/gold/{entity}"
+            f"s3://{BUCKET}/silver/{entity}"
         )
         assert glue_table["Parameters"]["table_type"] == "DELTA"
         assert (

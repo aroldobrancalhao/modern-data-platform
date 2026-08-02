@@ -2,7 +2,7 @@
 Modern Data Platform
 Processing Framework
 
-Gold catalog registration stage.
+Silver catalog registration stage.
 
 Author: Modern Data Platform
 License: MIT
@@ -46,10 +46,10 @@ _SPARK_TYPE_TO_GLUE_TYPE = {
 
 
 @dataclass(eq=False, slots=True, kw_only=True)
-class GoldCatalogRegistrationStage(Stage):
+class SilverCatalogRegistrationStage(Stage):
     """
-    Registers the Gold Delta table a Databricks Job just wrote
-    (``gold/{entity}/``) into the Glue Catalog.
+    Registers the Silver Delta table a Databricks Job just wrote
+    (``silver/{entity}/``) into the Glue Catalog.
 
     Runs on the Airflow side, not inside the Databricks notebook --
     see docs/architecture/roadmap-next-steps.md for why (Databricks
@@ -65,10 +65,10 @@ class GoldCatalogRegistrationStage(Stage):
     ``metaData`` action at all), so the log is scanned from the
     newest commit backwards until one is found. This deliberately
     does not read Delta checkpoint files (``*.checkpoint.parquet``) --
-    correct for a table that was just written by the Gold notebook,
+    correct for a table that was just written by the Silver notebook,
     not a general-purpose Delta log reader.
 
-    A missing Delta table (no Job gold run yet -- no ``_delta_log``
+    A missing Delta table (no Job silver run yet -- no ``_delta_log``
     objects at all) is a business failure -- retrying will not make
     it appear -- reported as a FAILED StageResult, mirroring
     BronzeIngestionStage. Any other error (S3/Glue permission,
@@ -83,7 +83,7 @@ class GoldCatalogRegistrationStage(Stage):
 
     entity: str
 
-    database: str = "mdp_gold_dev"
+    database: str = "mdp_silver_dev"
 
     async def execute(
         self,
@@ -96,7 +96,7 @@ class GoldCatalogRegistrationStage(Stage):
         )
 
         location = StorageLocation.from_uri(
-            StorageConfig.gold(self.entity)
+            StorageConfig.silver(self.entity)
         )
 
         schema = self._read_delta_schema(storage_provider, location)

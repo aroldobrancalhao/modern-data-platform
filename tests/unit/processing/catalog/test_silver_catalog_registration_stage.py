@@ -2,7 +2,7 @@
 Modern Data Platform
 Processing Framework
 
-Unit tests for GoldCatalogRegistrationStage: proves the Delta
+Unit tests for SilverCatalogRegistrationStage: proves the Delta
 _delta_log scanning logic (including the "scan backwards until a
 metaData action is found" rule, confirmed empirically against a real
 local Delta table) and the Spark -> Glue type mapping, entirely with
@@ -22,8 +22,8 @@ import pytest
 
 from data_platform.catalog import CatalogDatabase, CatalogTable
 from data_platform.config.settings import Settings
-from data_platform.processing.catalog.gold_catalog_registration_stage import (
-    GoldCatalogRegistrationStage,
+from data_platform.processing.catalog.silver_catalog_registration_stage import (
+    SilverCatalogRegistrationStage,
 )
 from data_platform.processing.core.context_keys.catalog_keys import (
     CatalogKeys,
@@ -47,7 +47,7 @@ pytestmark = pytest.mark.anyio
 
 BUCKET = "mdp-datalake-dev-857854758128"
 ENTITY = "customers"
-DATABASE = "mdp_gold_dev"
+DATABASE = "mdp_silver_dev"
 
 
 # ----------------------------------------------------------------------
@@ -122,7 +122,7 @@ class FakeStorageProvider(Provider, StorageProvider):
 class FakeCatalogProvider(Provider, CatalogProvider):
     """
     In-memory CatalogProvider that only implements create_table --
-    the only method GoldCatalogRegistrationStage actually calls.
+    the only method SilverCatalogRegistrationStage actually calls.
     """
 
     def __init__(self) -> None:
@@ -197,14 +197,14 @@ def _metadata_action(fields: list[dict]) -> dict:
 
 def _delta_log_key(version: int) -> str:
     return (
-        f"gold/{ENTITY}/_delta_log/{version:020d}.json"
+        f"silver/{ENTITY}/_delta_log/{version:020d}.json"
     )
 
 
 def _build_stage(
     storage_provider: FakeStorageProvider,
     catalog_provider: FakeCatalogProvider,
-) -> GoldCatalogRegistrationStage:
+) -> SilverCatalogRegistrationStage:
     registry = ProviderRegistry()
 
     class StorageBuilder(ProviderBuilder[FakeStorageProvider]):
@@ -223,9 +223,9 @@ def _build_stage(
         settings=Settings(),
     )
 
-    return GoldCatalogRegistrationStage(
-        id="register-gold-customers",
-        name="Register Gold Customers",
+    return SilverCatalogRegistrationStage(
+        id="register-silver-customers",
+        name="Register Silver Customers",
         storage_provider_name="aws.s3",
         catalog_provider_name="aws.glue",
         entity=ENTITY,
@@ -236,9 +236,9 @@ def _build_stage(
 
 def _create_context() -> ProcessingContext:
     return ProcessingContext(
-        id="context-gold-catalog-registration",
+        id="context-silver-catalog-registration",
         metadata=ExecutionMetadata(
-            execution_id="execution-gold-catalog-registration",
+            execution_id="execution-silver-catalog-registration",
         ),
     )
 

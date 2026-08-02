@@ -52,6 +52,16 @@ class StorageConfig:
 
     @classmethod
     def gold(cls, entity: str) -> str:
+        """
+        No current caller as of ADR-011 (Databricks/Spark's
+        responsibility now ends at Silver; ``publish_gold.ipynb`` and
+        the Gold Job were removed). Kept, not dead code: when dbt
+        materializes the Gold star schema via ``dbt-athena`` (ADR-011's
+        next step), it will very likely write under this same
+        ``gold/{entity}/`` S3 prefix -- this becomes the real path
+        builder for that configuration, not decorative symmetry with
+        ``.bronze()``/``.silver()``.
+        """
         return cls._uri("gold", entity)
 
     @staticmethod
