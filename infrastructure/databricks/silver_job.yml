@@ -4,7 +4,7 @@ resources:
       name: Silver Pipeline
 
       parameters:
-        - name: entity
+        - name: entities
           default: customers
         - name: wheel_path
           default: ${workspace.root_path}/artifacts/.internal
