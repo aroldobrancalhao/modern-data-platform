@@ -14,3 +14,8 @@ target-path: "target"
 clean-targets:
   - "target"
   - "dbt_packages"
+
+models:
+  modern_data_platform:
+    silver:
+      +materialized: view

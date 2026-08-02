@@ -1,0 +1,58 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: Staging model for the Silver customers source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_orders
+    description: Staging model for the Silver orders source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_order_items
+    description: Staging model for the Silver order_items source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: order_item_id
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_products
+    description: Staging model for the Silver products source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: product_id
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_payments
+    description: Staging model for the Silver payments source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: payment_id
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_sellers
+    description: Staging model for the Silver sellers source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: seller_id
+        tests:
+          - not_null
+          - unique
+
+  - name: stg_categories
+    description: Staging model for the Silver categories source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: category_id
+        tests:
+          - not_null
+          - unique

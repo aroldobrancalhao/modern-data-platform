@@ -15,3 +15,21 @@ sources:
           Marketplace customers, standardized (see
           apply_standard_transformations). Registered in Glue via
           scripts/run_silver_catalog_registration_once.py.
+
+      - name: orders
+        description: Marketplace orders, standardized.
+
+      - name: order_items
+        description: Line items belonging to an order, standardized.
+
+      - name: products
+        description: Seller catalog products, standardized.
+
+      - name: payments
+        description: Payments made against an order, standardized.
+
+      - name: sellers
+        description: Marketplace sellers, standardized.
+
+      - name: categories
+        description: Product categories, standardized.

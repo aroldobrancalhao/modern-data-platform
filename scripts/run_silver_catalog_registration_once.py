@@ -1,11 +1,15 @@
 """
 Modern Data Platform
 
-One-off script: runs SilverCatalogRegistrationStage once against the
-real Silver Delta table (silver/customers/) and the real Glue Catalog
-(mdp_silver_dev), on the Airflow side -- the real local AWS credential
-chain already works here, unlike inside the Databricks cluster (see
-docs/architecture/roadmap-next-steps.md).
+One-off script: runs SilverCatalogRegistrationStage once per entity
+against the real Silver Delta tables (silver/{entity}/) and the real
+Glue Catalog (mdp_silver_dev), on the Airflow side -- the real local
+AWS credential chain already works here, unlike inside the Databricks
+cluster (see docs/architecture/roadmap-next-steps.md).
+
+ENTITIES excludes "customers": it was already registered in an
+earlier run (see ADR-011 migration) -- re-running create_table for an
+unchanged schema is harmless, but there's no need to repeat it here.
 
 Run with:
 
@@ -40,36 +44,42 @@ from data_platform.processing.executor.sequential_executor import (
 )
 from data_platform.providers.provider_factory import ProviderFactory
 
-ENTITY = "customers"
 DATABASE = "mdp_silver_dev"
 
+ENTITIES: tuple[str, ...] = (
+    "orders",
+    "order_items",
+    "products",
+    "payments",
+    "sellers",
+    "categories",
+)
 
-async def main() -> None:
-    provider_factory = ProviderFactory(
-        registry=bootstrap(),
-        settings=Settings(),
-    )
 
+async def _register_one(
+    entity: str,
+    provider_factory: ProviderFactory,
+) -> None:
     stage = SilverCatalogRegistrationStage(
-        id="register-silver-customers-once",
-        name="Register Silver Customers (one-off)",
+        id=f"register-silver-{entity}-once",
+        name=f"Register Silver {entity.title()} (one-off)",
         storage_provider_name="aws.s3",
         catalog_provider_name="aws.glue",
-        entity=ENTITY,
+        entity=entity,
         database=DATABASE,
         provider_factory=provider_factory,
     )
 
     pipeline = Pipeline(
-        id="silver-catalog-registration-once",
-        name="Silver Catalog Registration (one-off)",
+        id=f"silver-catalog-registration-once-{entity}",
+        name=f"Silver Catalog Registration (one-off) - {entity}",
         stages=(stage,),
     )
 
     context = ProcessingContext(
-        id="context-silver-catalog-registration-once",
+        id=f"context-silver-catalog-registration-once-{entity}",
         metadata=ExecutionMetadata(
-            execution_id="execution-silver-catalog-registration-once",
+            execution_id=f"execution-silver-catalog-registration-once-{entity}",
         ),
     )
 
@@ -78,14 +88,24 @@ async def main() -> None:
     if result.status != ExecutionStatus.COMPLETED:
         stage_result = result.stage_results[0]
         raise SystemExit(
-            f"Registration failed: {stage_result.error_type} - "
-            f"{stage_result.error_message}"
+            f"Registration failed for '{entity}': "
+            f"{stage_result.error_type} - {stage_result.error_message}"
         )
 
     print(
         f"OK: registered {context.get(CatalogKeys.DATABASE)}."
         f"{context.get(CatalogKeys.TABLE)}"
     )
+
+
+async def main() -> None:
+    provider_factory = ProviderFactory(
+        registry=bootstrap(),
+        settings=Settings(),
+    )
+
+    for entity in ENTITIES:
+        await _register_one(entity, provider_factory)
 
 
 if __name__ == "__main__":
