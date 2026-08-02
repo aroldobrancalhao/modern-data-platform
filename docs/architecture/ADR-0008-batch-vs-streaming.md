@@ -121,10 +121,10 @@ SilverService
 Silver Data Quality
     │
     ▼
-GoldService
+GoldService (dbt)
     │
     ▼
-Star Schema
+Star Schema (dbt models)
     │
     ▼
 Glue Catalog
