@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from simulator.core.database import Database
+from psycopg import Connection
 
 from simulator.domain.orders.order_repository import OrderRepository
 from simulator.domain.payments.payment_generator import PaymentGenerator
@@ -19,42 +19,39 @@ class PaymentService:
     )
 
     def __init__(self) -> None:
-        self._database = Database()
         self._generator = PaymentGenerator()
 
-    def create_payment(self) -> Payment:
+    def create_payment(self, connection: Connection) -> Payment:
+        repository = PaymentRepository(connection)
 
-        with self._database.connection() as connection:
-            repository = PaymentRepository(connection)
-
-            for code, name in self.PAYMENT_METHODS:
-                repository.create_payment_method(
-                    PaymentMethod.create(
-                        code=code,
-                        name=name,
-                    )
+        for code, name in self.PAYMENT_METHODS:
+            repository.create_payment_method(
+                PaymentMethod.create(
+                    code=code,
+                    name=name,
                 )
-
-            order_repository = OrderRepository(connection)
-
-            order = order_repository.get_random_order()
-
-            if order is None:
-                raise ValueError("No order found.")
-
-            order_id, _, _, amount = order
-
-            payment_method = repository.get_random_payment_method()
-
-            if payment_method is None:
-                raise ValueError("No payment method found.")
-
-            payment = self._generator.generate(
-                order_id=order_id,
-                payment_method_id=payment_method,
-                amount=Decimal(amount),
             )
 
-            repository.create_payment(payment)
+        order_repository = OrderRepository(connection)
 
-            return payment
+        order = order_repository.get_random_order()
+
+        if order is None:
+            raise ValueError("No order found.")
+
+        order_id, _, _, amount = order
+
+        payment_method = repository.get_random_payment_method()
+
+        if payment_method is None:
+            raise ValueError("No payment method found.")
+
+        payment = self._generator.generate(
+            order_id=order_id,
+            payment_method_id=payment_method,
+            amount=Decimal(amount),
+        )
+
+        repository.create_payment(payment)
+
+        return payment

@@ -57,5 +57,3 @@ class CustomerAddressRepository:
                     address.updated_at,
                 ),
             )
-
-        self._connection.commit()

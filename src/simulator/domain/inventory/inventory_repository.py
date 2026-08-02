@@ -44,8 +44,6 @@ class InventoryRepository:
                 ),
             )
 
-        self._connection.commit()
-
     def decrease_available_quantity(
         self,
         inventory_id,

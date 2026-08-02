@@ -50,8 +50,6 @@ class WarehouseRepository:
                 ),
             )
 
-        self._connection.commit()
-
     def get_random_id(self) -> UUID | None:
         with self._connection.cursor() as cursor:
             cursor.execute(

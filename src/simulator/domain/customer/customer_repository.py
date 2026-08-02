@@ -47,8 +47,6 @@ class CustomerRepository:
 
             inserted = cursor.fetchone() is not None
 
-        self._connection.commit()
-
         return inserted
 
     def get_random_id(self) -> UUID | None:

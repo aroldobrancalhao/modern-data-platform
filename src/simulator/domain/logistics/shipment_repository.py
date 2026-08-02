@@ -51,8 +51,6 @@ class ShipmentRepository:
                 ),
             )
 
-        self._connection.commit()
-
     def get_random_carrier(self) -> UUID | None:
         with self._connection.cursor() as cursor:
             cursor.execute(
@@ -107,5 +105,3 @@ class ShipmentRepository:
                     shipment.updated_at,
                 ),
             )
-
-        self._connection.commit()

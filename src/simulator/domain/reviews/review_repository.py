@@ -47,5 +47,3 @@ class ReviewRepository:
                     review.updated_at,
                 ),
             )
-
-        self._connection.commit()

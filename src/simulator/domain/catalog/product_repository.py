@@ -76,8 +76,6 @@ class ProductRepository:
                 ),
             )
 
-        self._connection.commit()
-
     def get_random_id(self):
         with self._connection.cursor() as cursor:
             cursor.execute(

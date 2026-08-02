@@ -43,8 +43,6 @@ class PaymentRepository:
                 ),
             )
 
-        self._connection.commit()
-
     def get_random_payment_method(self) -> UUID | None:
         with self._connection.cursor() as cursor:
             cursor.execute(
@@ -102,5 +100,3 @@ class PaymentRepository:
                     payment.updated_at,
                 ),
             )
-
-        self._connection.commit()

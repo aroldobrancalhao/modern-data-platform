@@ -1,4 +1,4 @@
-from simulator.core.database import Database
+from psycopg import Connection
 
 from simulator.domain.customer.customer_repository import CustomerRepository
 from simulator.domain.inventory.inventory_repository import InventoryRepository
@@ -11,60 +11,58 @@ from simulator.domain.orders.order_repository import OrderRepository
 
 class OrderService:
     def __init__(self) -> None:
-        self._database = Database()
         self._generator = OrderGenerator()
 
-    def create_order(self) -> Order:
-        with self._database.connection() as connection:
-            customer_repository = CustomerRepository(connection)
-            inventory_repository = InventoryRepository(connection)
+    def create_order(self, connection: Connection) -> Order:
+        customer_repository = CustomerRepository(connection)
+        inventory_repository = InventoryRepository(connection)
 
-            customer_id = customer_repository.get_random_id()
+        customer_id = customer_repository.get_random_id()
 
-            if customer_id is None:
-                raise ValueError("No customer found.")
+        if customer_id is None:
+            raise ValueError("No customer found.")
 
-            inventory = inventory_repository.get_random_inventory()
+        inventory = inventory_repository.get_random_inventory()
 
-            if inventory is None:
-                raise ValueError("No inventory found.")
+        if inventory is None:
+            raise ValueError("No inventory found.")
 
-            inventory_id, product_id, _ = inventory
+        inventory_id, product_id, _ = inventory
 
-            unit_price = inventory_repository.get_product(product_id)
+        unit_price = inventory_repository.get_product(product_id)
 
-            if unit_price is None:
-                raise ValueError("No product price found.")
+        if unit_price is None:
+            raise ValueError("No product price found.")
 
-            order, order_item, history = self._generator.generate(
-                customer_id=customer_id,
-                product_id=product_id,
-                unit_price=unit_price,
-            )
+        order, order_item, history = self._generator.generate(
+            customer_id=customer_id,
+            product_id=product_id,
+            unit_price=unit_price,
+        )
 
-            movement = InventoryMovement.outbound(
-                inventory_id=inventory_id,
-                order_id=order.order_id,
-                quantity=order_item.quantity,
-            )
+        movement = InventoryMovement.outbound(
+            inventory_id=inventory_id,
+            order_id=order.order_id,
+            quantity=order_item.quantity,
+        )
 
-            order_repository = OrderRepository(connection)
-            movement_repository = InventoryMovementRepository(connection)
+        order_repository = OrderRepository(connection)
+        movement_repository = InventoryMovementRepository(connection)
 
-            order_repository.create_order(
-                order=order,
-                order_item=order_item,
-                history=history,
-            )
+        order_repository.create_order(
+            order=order,
+            order_item=order_item,
+            history=history,
+        )
 
-            updated = inventory_repository.decrease_available_quantity(
-                inventory_id=inventory_id,
-                quantity=order_item.quantity,
-            )
+        updated = inventory_repository.decrease_available_quantity(
+            inventory_id=inventory_id,
+            quantity=order_item.quantity,
+        )
 
-            if not updated:
-                raise ValueError("Insufficient inventory.")
+        if not updated:
+            raise ValueError("Insufficient inventory.")
 
-            movement_repository.insert(movement)
+        movement_repository.insert(movement)
 
-            return order
+        return order

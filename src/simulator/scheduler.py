@@ -1,5 +1,6 @@
 from time import sleep
 
+from simulator.core.database import Database
 from simulator.core.settings import get_settings
 from simulator.domain.catalog.category_service import CategoryService
 from simulator.domain.catalog.product_service import ProductService
@@ -16,6 +17,7 @@ from simulator.domain.reviews.review_service import ReviewService
 class MarketplaceScheduler:
     def __init__(self) -> None:
         self._settings = get_settings()
+        self._database = Database()
 
         self._customer_service = CustomerService()
         self._seller_service = SellerService()
@@ -29,38 +31,39 @@ class MarketplaceScheduler:
         self._review_service = ReviewService()
 
     def run_cycle(self) -> None:
-        customer = self._customer_service.create_customer()
-        print(f"Customer created: {customer.customer_id}")
+        with self._database.connection() as connection:
+            customer = self._customer_service.create_customer(connection)
+            print(f"Customer created: {customer.customer_id}")
 
-        seller = self._seller_service.create_seller()
-        print(f"Seller created: {seller.seller_id}")
+            seller = self._seller_service.create_seller(connection)
+            print(f"Seller created: {seller.seller_id}")
 
-        category = self._category_service.create_category()
-        print(f"Category created: {category.category_id}")
+            category = self._category_service.create_category(connection)
+            print(f"Category created: {category.category_id}")
 
-        product = self._product_service.create_product()
-        print(f"Product created: {product.product_id}")
+            product = self._product_service.create_product(connection)
+            print(f"Product created: {product.product_id}")
 
-        warehouse = self._warehouse_service.create_warehouse()
-        print(f"Warehouse created: {warehouse.warehouse_id}")
+            warehouse = self._warehouse_service.create_warehouse(connection)
+            print(f"Warehouse created: {warehouse.warehouse_id}")
 
-        inventory = self._inventory_service.create_inventory()
-        print(f"Inventory created: {inventory.inventory_id}")
+            inventory = self._inventory_service.create_inventory(connection)
+            print(f"Inventory created: {inventory.inventory_id}")
 
-        order = self._order_service.create_order()
-        print(f"Order created: {order.order_number}")
+            order = self._order_service.create_order(connection)
+            print(f"Order created: {order.order_number}")
 
-        if self._settings.enable_payments:
-            payment = self._payment_service.create_payment()
-            print(f"Payment created: {payment.payment_id} ({payment.status})")
+            if self._settings.enable_payments:
+                payment = self._payment_service.create_payment(connection)
+                print(f"Payment created: {payment.payment_id} ({payment.status})")
 
-        if self._settings.enable_shipments:
-            shipment = self._shipment_service.create_shipment()
-            print(f"Shipment created: {shipment.shipment_id} ({shipment.status})")
+            if self._settings.enable_shipments:
+                shipment = self._shipment_service.create_shipment(connection)
+                print(f"Shipment created: {shipment.shipment_id} ({shipment.status})")
 
-        if self._settings.enable_reviews:
-            review = self._review_service.create_review()
-            print(f"Review created: {review.review_id} ({review.rating}★)")
+            if self._settings.enable_reviews:
+                review = self._review_service.create_review(connection)
+                print(f"Review created: {review.review_id} ({review.rating}★)")
 
     def run_batch(self) -> None:
         print(f"\nStarting batch with {self._settings.simulator_batch_size} cycle(s)\n")
