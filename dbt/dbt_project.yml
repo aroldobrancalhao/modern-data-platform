@@ -19,3 +19,6 @@ models:
   modern_data_platform:
     silver:
       +materialized: view
+    gold:
+      +materialized: view
+      +schema: mdp_gold_dev
