@@ -76,19 +76,30 @@ More details are available in the Architecture Decision Records (ADRs).
                         ▼
                  Apache Spark
                         │
-         ┌──────────────┼──────────────┐
-         ▼              ▼              ▼
-      Bronze         Silver          Gold
-                        │
-                        ▼
-                       dbt
-                        │
-                        ▼
-                Amazon Athena
-                        │
-                        ▼
-                  Power BI
+              ┌─────────┴─────────┐
+              ▼                   ▼
+           Bronze               Silver
+         (Delta Lake)         (Delta Lake)
+                                   │
+                                   ▼
+                            Glue Catalog
+                                   │
+                                   ▼
+                                  dbt
+                                   │
+                                   ▼
+                                 Gold
+                                   │
+                                   ▼
+                            Amazon Athena
+                                   │
+                                   ▼
+                              Power BI
 ```
+
+Databricks/Spark's responsibility ends at Silver; Gold is dbt's
+responsibility, reading Silver through the Glue Catalog (see
+ADR-011).
 
 ---
 
@@ -96,14 +107,16 @@ More details are available in the Architecture Decision Records (ADRs).
 
 | Layer | Technology |
 |--------|------------|
-| Programming Language | Python 3.13 |
+| Programming Language | Python 3.12 |
 | Database | PostgreSQL |
 | CDC | Debezium |
 | Streaming | Apache Kafka |
 | Workflow Orchestration | Apache Airflow |
 | Distributed Processing | Apache Spark |
 | Compute Platform | Databricks |
+| Data Access / Governance | Unity Catalog (Storage Credential + External Location) |
 | Object Storage | Amazon S3 |
+| Table Format | Delta Lake |
 | Data Modeling | dbt |
 | Query Engine | Amazon Athena |
 | Visualization | Power BI |
@@ -211,7 +224,9 @@ Examples:
 
 - Bronze Layer
 - Silver Layer
-- Gold Layer
+
+Gold modeling is dbt's responsibility, not Spark's (see ADR-011) --
+Databricks/Spark's processing responsibility ends at Silver.
 
 ---
 
@@ -277,11 +292,15 @@ Silver
 
 ↓
 
-Gold
+Glue Catalog
 
 ↓
 
 dbt
+
+↓
+
+Gold
 
 ↓
 
@@ -338,7 +357,7 @@ cd modern-data-platform
 ## Install dependencies
 
 ```bash
-poetry install
+uv sync
 ```
 
 ## Start local infrastructure
@@ -349,12 +368,11 @@ docker compose up -d
 
 The local environment includes:
 
-- PostgreSQL
-- Kafka
+- PostgreSQL (marketplace database + Airflow metastore)
+- Kafka (+ Kafka UI)
 - Debezium
 - Airflow
-- MinIO
-- Spark
+- Redis (Celery broker for Airflow)
 
 ## Databricks authentication (local)
 
@@ -401,51 +419,62 @@ Current ADRs:
 - ADR-003 – Cloud Strategy
 - ADR-004 – Repository Structure
 - ADR-005 – Development Standards
+- ADR-006 – Platform Capability Model
+- ADR-007 – Workflow Capability
+- ADR-0008 – Batch vs Streaming Processing Architecture
+- ADR-009 – Adopt Processing Framework
+- ADR-010 – Capability-Based Shared Execution Context
+- ADR-011 – Gold Modeling Moves to dbt
 
 ---
 
 # Project Roadmap
 
+Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
+
 ## Phase 1 — Foundation
 
-- Repository Structure
-- Docker Environment
-- Terraform Foundation
+- ✅ Repository Structure
+- ✅ Docker Environment (Postgres, Kafka, Debezium, Airflow, Redis)
+- ✅ Terraform Foundation (`dev` environment applied: S3, Glue databases, Athena workgroup, Unity Catalog IAM trust)
 
 ## Phase 2 — CDC
 
-- PostgreSQL
-- Debezium
-- Kafka
+- ✅ PostgreSQL (populated by the simulator)
+- ✅ Debezium (connector running, capturing all `marketplace` tables)
+- ✅ Kafka (broker up, topics created on first captured change)
+- ⬜ Continuous Kafka consumer feeding the pipeline (messaging capability exists and is tested; no long-running consumer loop yet)
+- ⬜ Real Airflow DAG orchestrating the pipeline end to end (today the pipeline is triggered manually via `databricks bundle run`/CLI scripts, not an Airflow DAG -- only placeholder validation DAGs exist)
 
 ## Phase 3 — Data Lake
 
-- Bronze
-- Silver
-- Gold
+- ✅ Postgres extraction → `raw/` → Bronze → Silver, validated end to end against real Postgres/S3/Databricks for 7 entities (customers, orders, order_items, products, payments, sellers, categories)
+- ✅ Silver registered in the Glue Catalog (`SilverCatalogRegistrationStage`)
+- Gold is no longer a Spark/Databricks stage here -- moved to dbt (see ADR-011 and Phase 4)
 
 ## Phase 4 — Data Modeling
 
-- dbt
-- Athena
-- Metrics
+- ✅ dbt project scaffolded (`dbt/`), real connection to Athena/Glue confirmed (`dbt debug`)
+- ✅ Silver sources declared for all 7 entities; `stg_*` staging models implemented and tested against real Athena data for all 7
+- ⬜ `int_`/`dim_`/`fact_` Gold models (business modeling, joins, star schema)
+- ⬜ Metrics layer
 
 ## Phase 5 — Analytics
 
-- Dashboards
-- Business KPIs
+- ⬜ Dashboards
+- ⬜ Business KPIs
 
 ## Phase 6 — Observability
 
-- Logging
-- Metrics
-- Alerts
+- ⬜ Logging
+- ⬜ Metrics
+- ⬜ Alerts
 
 ## Phase 7 — CI/CD
 
-- GitHub Actions
-- Automated Testing
-- Deployment
+- ⬜ GitHub Actions
+- ⬜ Automated Testing (tests exist and run locally; not yet wired into CI)
+- ⬜ Deployment
 
 ---
 
@@ -456,7 +485,6 @@ Planned enhancements include:
 - Azure implementation
 - Google Cloud implementation
 - Apache Iceberg
-- Delta Lake
 - OpenLineage
 - DataHub
 - Kubernetes deployment
@@ -467,9 +495,22 @@ Planned enhancements include:
 
 # Contributing
 
-Contributions are welcome.
+Contributions are welcome. There is no separate `CONTRIBUTING.md` yet
+-- this section is the contributing guideline until one exists.
 
-Please read the contributing guidelines before submitting issues or pull requests.
+## Keeping the README in sync with the architecture
+
+Any structural architecture change must update this README in the
+same commit, or in a commit immediately following it -- divergence
+between this document and the real state of the project should never
+be allowed to accumulate. This applies to changes such as:
+
+- A data format or table format change (e.g. adopting/dropping Delta Lake, Iceberg)
+- A catalog or query engine change (e.g. Glue/Athena replaced or supplemented)
+- A new capability or integration (e.g. a new cloud provider, a new messaging system)
+- A Project Roadmap phase moving from not-started to partial/done, or vice versa
+
+When in doubt about whether a change is "structural" enough to require this, err on the side of updating the README.
 
 ---
 
