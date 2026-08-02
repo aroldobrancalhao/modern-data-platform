@@ -3,12 +3,14 @@ resources:
     bronze_optimize:
       name: Bronze Optimize Pipeline
 
+      parameters:
+        - name: entity
+          default: customers
+        - name: wheel_path
+          default: ${workspace.root_path}/artifacts/.internal
+
       tasks:
         - task_key: bronze_optimize
 
           notebook_task:
             notebook_path: ../../notebooks/bronze/optimize_bronze.ipynb
-
-            base_parameters:
-              entity: customers
-              wheel_path: ${workspace.root_path}/artifacts/.internal

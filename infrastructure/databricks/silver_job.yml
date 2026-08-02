@@ -3,12 +3,14 @@ resources:
     silver:
       name: Silver Pipeline
 
+      parameters:
+        - name: entity
+          default: customers
+        - name: wheel_path
+          default: ${workspace.root_path}/artifacts/.internal
+
       tasks:
         - task_key: silver
 
           notebook_task:
             notebook_path: ../../notebooks/silver/transform_silver.ipynb
-
-            base_parameters:
-              entity: customers
-              wheel_path: ${workspace.root_path}/artifacts/.internal

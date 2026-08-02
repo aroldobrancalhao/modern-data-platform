@@ -3,12 +3,14 @@ resources:
     bronze_validate:
       name: Bronze Validate Pipeline
 
+      parameters:
+        - name: entity
+          default: customers
+        - name: wheel_path
+          default: ${workspace.root_path}/artifacts/.internal
+
       tasks:
         - task_key: bronze_validate
 
           notebook_task:
             notebook_path: ../../notebooks/bronze/validate_bronze.ipynb
-
-            base_parameters:
-              entity: customers
-              wheel_path: ${workspace.root_path}/artifacts/.internal

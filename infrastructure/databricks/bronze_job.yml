@@ -3,12 +3,14 @@ resources:
     bronze:
       name: Bronze Pipeline
 
+      parameters:
+        - name: entity
+          default: customers
+        - name: wheel_path
+          default: ${workspace.root_path}/artifacts/.internal
+
       tasks:
         - task_key: bronze
 
           notebook_task:
             notebook_path: ../../notebooks/bronze/ingest_sources.ipynb
-
-            base_parameters:
-              entity: customers
-              wheel_path: ${workspace.root_path}/artifacts/.internal

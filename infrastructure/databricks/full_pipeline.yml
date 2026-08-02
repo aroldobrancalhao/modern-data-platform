@@ -3,11 +3,17 @@ resources:
     full_pipeline:
       name: Full Pipeline
 
+      parameters:
+        - name: entity
+          default: customers
+
       tasks:
         - task_key: bronze
 
           run_job_task:
             job_id: ${resources.jobs.bronze.id}
+            job_parameters:
+              entity: "{{job.parameters.entity}}"
 
         - task_key: bronze_validate
 
@@ -16,6 +22,8 @@ resources:
 
           run_job_task:
             job_id: ${resources.jobs.bronze_validate.id}
+            job_parameters:
+              entity: "{{job.parameters.entity}}"
 
         - task_key: bronze_optimize
 
@@ -24,6 +32,8 @@ resources:
 
           run_job_task:
             job_id: ${resources.jobs.bronze_optimize.id}
+            job_parameters:
+              entity: "{{job.parameters.entity}}"
 
         - task_key: silver
 
@@ -32,3 +42,5 @@ resources:
 
           run_job_task:
             job_id: ${resources.jobs.silver.id}
+            job_parameters:
+              entity: "{{job.parameters.entity}}"
