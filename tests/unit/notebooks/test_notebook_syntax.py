@@ -24,7 +24,6 @@ NOTEBOOKS = (
     REPO_ROOT / "notebooks/bronze/optimize_bronze.ipynb",
     REPO_ROOT / "notebooks/bronze/validate_bronze.ipynb",
     REPO_ROOT / "notebooks/silver/transform_silver.ipynb",
-    REPO_ROOT / "notebooks/gold/publish_gold.ipynb",
 )
 
 
