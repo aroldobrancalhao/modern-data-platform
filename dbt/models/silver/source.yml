@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: silver
+    description: >
+      Silver layer, registered in Glue by SilverCatalogRegistrationStage
+      (see ADR-011). Standardized output of transform_silver.ipynb --
+      no business modeling here, only column hygiene/dedup.
+    database: awsdatacatalog
+    schema: mdp_silver_dev
+
+    tables:
+      - name: customers
+        description: >
+          Marketplace customers, standardized (see
+          apply_standard_transformations). Registered in Glue via
+          scripts/run_silver_catalog_registration_once.py.
