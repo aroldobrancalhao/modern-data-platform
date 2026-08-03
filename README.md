@@ -486,7 +486,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 
 - ✅ dbt project scaffolded (`dbt/`), real connection to Athena/Glue confirmed (`dbt debug`)
 - ✅ Silver sources declared for all 7 entities; `stg_*` staging models implemented and tested against real Athena data for all 7
-- ⬜ `int_`/`dim_`/`fact_` Gold models (business modeling, joins, star schema)
+- ✅ `int_`/`dim_`/`fact_` Gold models: `int_order_items_enriched`, `dim_customers`, `dim_products`, `fact_orders` (star schema, table-materialized, `fact_orders` partitioned by `order_year`/`order_month`) -- `dbt run`/`dbt test` both green against real Athena
 - ⬜ Metrics layer
 
 ## Phase 5 — Analytics
