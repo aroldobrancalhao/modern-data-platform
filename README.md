@@ -374,6 +374,36 @@ The local environment includes:
 - Airflow
 - Redis (Celery broker for Airflow)
 
+## Run the simulator
+
+```bash
+PYTHONPATH=src PYTHONUNBUFFERED=1 uv run python -m simulator.app > /tmp/simulator.log 2>&1 &
+```
+
+`PYTHONPATH=src` is required: `pyproject.toml` has no `[build-system]`,
+so `uv run` does not install `simulator` (or any other `src/` package)
+into the venv -- without it you get `ModuleNotFoundError: No module
+named 'simulator'`. `pytest` doesn't need this because
+`[tool.pytest.ini_options]` already sets `pythonpath = ["src"]`, but
+that config only applies to pytest, not to `uv run`/plain `python`.
+See "`src/` packages aren't installable -- `PYTHONPATH` required
+outside pytest" in `docs/architecture/roadmap-next-steps.md` for the
+alternative of making the project properly installable instead of
+relying on `PYTHONPATH`.
+
+An unhandled exception still kills the process (there is no top-level
+retry/supervisor loop), matching the exit code you'll see if it dies.
+Faker-uniqueness exhaustion and cross-run unique-constraint collisions
+are handled (`unique_or_fallback`, `insert_with_unique_retry`), so
+those specific cases no longer crash the process -- but any other
+unexpected failure (e.g. Postgres becoming unreachable) still will.
+Run it with `PYTHONUNBUFFERED=1` (or `python -u`): Python
+block-buffers stdout when it isn't a TTY, so without this a crash can
+lose its own traceback in an unflushed buffer, leaving the log looking
+like it died silently mid-line with no error at all. This doesn't fix
+the underlying failure -- it just guarantees you can see why it
+failed.
+
 ## Databricks authentication (local)
 
 `DatabricksComputeProvider` delegates authentication entirely to the
