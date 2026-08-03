@@ -3,9 +3,11 @@ from datetime import datetime
 from decimal import Decimal
 from random import choices
 from uuid import UUID
+from uuid import uuid4
 
 from faker import Faker
 
+from simulator.core.faker_fallback import unique_or_fallback
 from simulator.domain.payments.payment_model import Payment
 
 
@@ -59,7 +61,11 @@ class PaymentGenerator:
             payment_id=self._faker.uuid4(cast_to=None),
             order_id=order_id,
             payment_method_id=payment_method_id,
-            transaction_code=self._faker.unique.bothify("TXN################"),
+            transaction_code=unique_or_fallback(
+                "payment.transaction_code",
+                lambda: self._faker.unique.bothify("TXN################"),
+                lambda: f"TXN{uuid4().hex[:16].upper()}",
+            ),
             amount=amount,
             status=status,
             authorized_at=authorized_at,

@@ -3,9 +3,11 @@ from datetime import datetime
 from datetime import timedelta
 from random import choices
 from uuid import UUID
+from uuid import uuid4
 
 from faker import Faker
 
+from simulator.core.faker_fallback import unique_or_fallback
 from simulator.domain.logistics.shipment_model import Shipment
 
 
@@ -63,7 +65,11 @@ class ShipmentGenerator:
         return Shipment.create(
             order_id=order_id,
             carrier_id=carrier_id,
-            tracking_code=self._faker.unique.bothify("BR##################"),
+            tracking_code=unique_or_fallback(
+                "shipment.tracking_code",
+                lambda: self._faker.unique.bothify("BR##################"),
+                lambda: f"BR{uuid4().hex[:18].upper()}",
+            ),
             status=status,
             shipped_at=shipped_at,
             estimated_delivery_at=estimated_delivery,
