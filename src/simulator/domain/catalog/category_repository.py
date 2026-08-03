@@ -1,5 +1,3 @@
-from uuid import UUID
-
 from psycopg import Connection
 
 from simulator.domain.catalog.seller_model import Category
@@ -9,7 +7,7 @@ class CategoryRepository:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def insert(self, category: Category) -> None:
+    def insert(self, category: Category) -> bool:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -27,6 +25,8 @@ class CategoryRepository:
                 (
                     %s,%s,%s,%s,%s,%s,%s
                 )
+                ON CONFLICT DO NOTHING
+                RETURNING category_id
                 """,
                 (
                     category.category_id,
@@ -39,17 +39,4 @@ class CategoryRepository:
                 ),
             )
 
-    def get_random_id(self) -> UUID | None:
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT category_id
-                FROM marketplace.categories
-                ORDER BY random()
-                LIMIT 1
-                """
-            )
-
-            row = cursor.fetchone()
-
-        return row[0] if row else None
+            return cursor.fetchone() is not None

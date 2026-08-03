@@ -1,6 +1,6 @@
 from psycopg import Connection
 
-from simulator.domain.catalog.product_repository import ProductRepository
+from simulator.core.reference_pool import ReferencePool
 from simulator.domain.inventory.inventory_generator import InventoryGenerator
 from simulator.domain.inventory.inventory_model import Inventory
 from simulator.domain.inventory.inventory_repository import InventoryRepository
@@ -11,12 +11,15 @@ class InventoryService:
     def __init__(self) -> None:
         self._generator = InventoryGenerator()
 
-    def create_inventory(self, connection: Connection) -> Inventory:
+    def create_inventory(
+        self,
+        connection: Connection,
+        pool: ReferencePool,
+    ) -> Inventory:
         warehouse_repository = WarehouseRepository(connection)
-        product_repository = ProductRepository(connection)
 
         warehouse_id = warehouse_repository.get_random_id()
-        product_id = product_repository.get_random_id()
+        product_id = pool.random_product_id()
 
         if warehouse_id is None:
             raise ValueError("No warehouse found.")

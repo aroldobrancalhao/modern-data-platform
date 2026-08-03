@@ -1,5 +1,3 @@
-from uuid import UUID
-
 from psycopg import Connection
 
 from simulator.domain.customer.customer_model import Customer
@@ -13,7 +11,8 @@ class CustomerRepository:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO marketplace.customers (
+                INSERT INTO marketplace.customers
+                (
                     customer_id,
                     first_name,
                     last_name,
@@ -25,8 +24,9 @@ class CustomerRepository:
                     created_at,
                     updated_at
                 )
-                VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                VALUES
+                (
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
                 ON CONFLICT DO NOTHING
                 RETURNING customer_id
@@ -45,21 +45,4 @@ class CustomerRepository:
                 ),
             )
 
-            inserted = cursor.fetchone() is not None
-
-        return inserted
-
-    def get_random_id(self) -> UUID | None:
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT customer_id
-                FROM marketplace.customers
-                ORDER BY random()
-                LIMIT 1
-                """
-            )
-
-            row = cursor.fetchone()
-
-        return row[0] if row else None
+            return cursor.fetchone() is not None

@@ -1,6 +1,3 @@
-from uuid import UUID
-from decimal import Decimal
-
 from psycopg import Connection
 
 from simulator.domain.catalog.product_model import Product
@@ -10,7 +7,7 @@ class ProductRepository:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def insert(self, product: Product) -> None:
+    def insert(self, product: Product) -> bool:
         with self._connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -36,24 +33,10 @@ class ProductRepository:
                 )
                 VALUES
                 (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
+                ON CONFLICT DO NOTHING
+                RETURNING product_id
                 """,
                 (
                     product.product_id,
@@ -76,40 +59,4 @@ class ProductRepository:
                 ),
             )
 
-    def get_random_id(self):
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT product_id
-                FROM marketplace.products
-                ORDER BY random()
-                LIMIT 1
-                """
-            )
-
-            row = cursor.fetchone()
-
-        return row[0] if row else None
-
-    def get_random_product(self) -> tuple[UUID, Decimal] | None:
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    product_id,
-                    price
-                FROM marketplace.products
-                ORDER BY random()
-                LIMIT 1
-                """
-            )
-
-            row = cursor.fetchone()
-
-        if row is None:
-            return None
-
-        return (
-            row[0],
-            row[1],
-        )
+            return cursor.fetchone() is not None

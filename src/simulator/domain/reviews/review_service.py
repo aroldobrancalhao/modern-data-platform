@@ -1,6 +1,5 @@
-from psycopg import Connection
-
-from simulator.domain.orders.order_repository import OrderRepository
+from simulator.core.batch_writer import BatchWriter
+from simulator.core.reference_pool import ReferencePool
 from simulator.domain.reviews.review_generator import ReviewGenerator
 from simulator.domain.reviews.review_model import Review
 from simulator.domain.reviews.review_repository import ReviewRepository
@@ -10,28 +9,19 @@ class ReviewService:
     def __init__(self) -> None:
         self._generator = ReviewGenerator()
 
-    def create_review(self, connection: Connection) -> Review:
-        order_repository = OrderRepository(connection)
-
-        order = order_repository.get_random_order()
+    def create_review(self, writer: BatchWriter, pool: ReferencePool) -> Review:
+        order = pool.random_order()
 
         if order is None:
             raise ValueError("No order found.")
 
-        (
-            order_id,
-            customer_id,
-            product_id,
-            _,
-        ) = order
-
         review = self._generator.generate(
-            order_id=order_id,
-            customer_id=customer_id,
-            product_id=product_id,
+            order_id=order.order_id,
+            customer_id=order.customer_id,
+            product_id=order.product_id,
         )
 
-        repository = ReviewRepository(connection)
+        repository = ReviewRepository(writer)
 
         repository.create_review(review)
 

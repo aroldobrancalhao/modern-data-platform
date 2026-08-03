@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     # Simulator
     simulator_batch_size: int = 1000
     simulator_interval_seconds: int = 5
+    simulator_insert_batch_size: int = 500
+    simulator_restock_probability: float = 0.08
 
     # Initial Load
     initial_catalog: bool = True

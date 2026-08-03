@@ -1,5 +1,3 @@
-from uuid import UUID
-
 from psycopg import Connection
 
 from simulator.domain.catalog.seller_model import Seller
@@ -29,8 +27,7 @@ class SellerRepository:
                 (
                     %s,%s,%s,%s,%s,%s,%s,%s,%s
                 )
-                ON CONFLICT
-                DO NOTHING
+                ON CONFLICT DO NOTHING
                 RETURNING seller_id
                 """,
                 (
@@ -46,21 +43,4 @@ class SellerRepository:
                 ),
             )
 
-            inserted = cursor.fetchone() is not None
-
-        return inserted
-
-    def get_random_id(self) -> UUID | None:
-        with self._connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT seller_id
-                FROM marketplace.sellers
-                ORDER BY random()
-                LIMIT 1
-                """
-            )
-
-            row = cursor.fetchone()
-
-        return row[0] if row else None
+            return cursor.fetchone() is not None
