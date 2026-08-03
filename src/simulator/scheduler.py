@@ -6,9 +6,9 @@ from simulator.core.batch_writer import BatchWriter
 from simulator.core.database import Database
 from simulator.core.reference_pool import ReferencePool
 from simulator.core.seed import seed_carriers
+from simulator.core.seed import seed_categories
 from simulator.core.seed import seed_payment_methods
 from simulator.core.settings import get_settings
-from simulator.domain.catalog.category_service import CategoryService
 from simulator.domain.catalog.product_service import ProductService
 from simulator.domain.catalog.seller_service import SellerService
 from simulator.domain.customer.customer_service import CustomerService
@@ -28,7 +28,6 @@ class MarketplaceScheduler:
 
         self._customer_service = CustomerService()
         self._seller_service = SellerService()
-        self._category_service = CategoryService()
         self._product_service = ProductService()
         self._warehouse_service = WarehouseService()
         self._inventory_service = InventoryService()
@@ -49,9 +48,6 @@ class MarketplaceScheduler:
 
         seller = self._seller_service.create_seller(connection, pool)
         print(f"Seller created: {seller.seller_id}")
-
-        category = self._category_service.create_category(connection, pool)
-        print(f"Category created: {category.category_id}")
 
         product = self._product_service.create_product(connection, pool)
         print(f"Product created: {product.product_id}")
@@ -89,6 +85,7 @@ class MarketplaceScheduler:
             pool = ReferencePool()
             pool.payment_method_ids = seed_payment_methods(connection)
             pool.carrier_ids = seed_carriers(connection)
+            pool.category_ids = seed_categories(connection)
 
             writer = BatchWriter(
                 connection,
