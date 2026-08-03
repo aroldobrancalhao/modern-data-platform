@@ -11,13 +11,15 @@ This exists to seed raw/ with real objects before a real Databricks
 full_pipeline run: ingest_sources.ipynb needs something under
 raw/{entity}/ to read.
 
-ENTITIES intentionally excludes "customers": it already went through
-raw -> bronze -> silver -> Glue in an earlier run (raw/customers/ has
-one object already), and ingest_sources.ipynb's read_raw() is a plain
-`spark.read.parquet(path)` over the whole raw/{entity}/ prefix -- a
-second extraction would land a second file next to it and double-count
-rows on any future Bronze run for customers. Re-run this for customers
-only if that raw object is ever removed first.
+ingest_sources.ipynb's read_raw() is a plain `spark.read.parquet(path)`
+over the whole raw/{entity}/ prefix, no dedup -- running this script
+again while a raw/{entity}/ prefix already has an object from an
+earlier run lands a second file next to it and double-counts every
+row Postgres still has from that earlier extraction on any future
+Bronze run (Postgres is cumulative here, nothing gets deleted, so
+that's effectively all of them). Each raw/{entity}/ prefix must be
+empty before running this -- delete any existing objects for the
+entities you're about to extract first.
 
 Run with:
 
@@ -57,6 +59,7 @@ from integrations.postgres.config import PostgresSettings
 # entity -> "schema.table" (the table lives in the `marketplace`
 # schema, not `public`).
 ENTITIES: tuple[tuple[str, str], ...] = (
+    ("customers", "marketplace.customers"),
     ("orders", "marketplace.orders"),
     ("order_items", "marketplace.order_items"),
     ("products", "marketplace.products"),
