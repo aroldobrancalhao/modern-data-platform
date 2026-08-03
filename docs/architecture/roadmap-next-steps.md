@@ -156,3 +156,11 @@ simulator directly; also worth checking first whether the Airflow
 containers' `src:/opt/mdp/src` volume mount (see
 `docs/environment-inventory.md`) relies on the current flat-path
 behavior before changing it.
+
+## Fraud Detection (Sprint 15) deferred to v2
+
+Sprint 15 in `project-decisions.md`'s Roadmap names "Fraud Detection",
+but the same document's Out of Scope section excludes Machine Learning
+from v1 -- and a real fraud-detection capability depends on it. Deferred
+to a future v2 that includes Machine Learning; out of scope for the
+current version, not started.

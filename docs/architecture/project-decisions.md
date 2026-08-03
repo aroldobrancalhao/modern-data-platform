@@ -508,6 +508,8 @@ Apache Flink
 
 Machine Learning
 
+Fraud Detection (Sprint 15) depends on Machine Learning and is therefore out of scope for v1.
+
 These technologies may be added in future versions but are not part of version 1.
 
 ---
