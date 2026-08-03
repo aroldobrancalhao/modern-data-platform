@@ -164,3 +164,34 @@ but the same document's Out of Scope section excludes Machine Learning
 from v1 -- and a real fraud-detection capability depends on it. Deferred
 to a future v2 that includes Machine Learning; out of scope for the
 current version, not started.
+
+## Airflow 3.0.4 -> 3.2.0+ upgrade needed to unify on SQLAlchemy 2.x
+
+`apache-airflow-core` pins `sqlalchemy[asyncio]<2.0,>=1.4.49` (confirmed
+via its installed package metadata) -- this project's own Alembic setup
+(`alembic/env.py`, adopted for the `marketplace` schema) has to use
+psycopg2 instead of the app's usual psycopg v3 because of it, since
+SQLAlchemy 1.4 has no `postgresql+psycopg` (v3) dialect.
+
+Airflow 3.2.0 (released 2026-04-07) is the first version to support
+SQLAlchemy 2.0 -- its release notes state it plainly: "Airflow now only
+support SQLAlchemy version 2", confirmed via its own package metadata
+(`sqlalchemy[asyncio]>=2.0.48`). That's a real version upgrade (3.0.4 ->
+at least 3.1.0 -> 3.2.0, or straight to 3.3.0, the latest as of
+2026-07-06), not a loose SQLAlchemy bump -- 3.2.0 alone carries ~24
+other significant changes (removed `TaskInstance.run()`/
+`render_templates()`, serde moved into the Task SDK, MySQL client
+dropped from container images, AuthManager permission changes, among
+others). None of them look like they hit this project's current, minimal
+Airflow usage (3 "foundation" validation DAGs, `AirflowWorkflowProvider`
+talks to Airflow purely over its REST API) -- but that needs confirming
+by actually doing the upgrade and re-validating, not assumed.
+
+**Not done now**: belongs with Sprint 5 (Airflow), which is itself
+already `Parcial` (no DAG orchestrates the real pipeline yet, see the
+sprint inventory) -- the SQLAlchemy unification should happen as part of
+building that sprint out for real, with its own validation (the 3
+existing DAGs, the `AirflowWorkflowProvider` REST integration, and a
+review of 3.2.0's ~24 significant changes against whatever Airflow
+usage exists by then), not bundled into the Alembic adoption for the
+`marketplace` schema.

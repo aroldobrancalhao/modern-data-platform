@@ -374,6 +374,21 @@ The local environment includes:
 - Airflow
 - Redis (Celery broker for Airflow)
 
+## Apply database migrations
+
+```bash
+PYTHONPATH=src uv run alembic upgrade head
+```
+
+The `marketplace` schema's initial 17 tables come from
+`infrastructure/docker/postgres/init/*.sql`, run automatically by
+Postgres on first container boot -- Alembic (`alembic/`, `alembic.ini`
+at the repo root) takes over from there for every change after that.
+Alembic uses `postgresql+psycopg2://` here, not the app's usual
+psycopg v3 -- `apache-airflow-core` pins SQLAlchemy below 2.0, which has
+no v3 dialect (see `docs/architecture/roadmap-next-steps.md`'s Airflow
+upgrade entry for why, and when that goes away).
+
 ## Run the simulator
 
 ```bash
