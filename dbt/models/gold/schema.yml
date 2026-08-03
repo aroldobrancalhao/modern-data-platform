@@ -52,3 +52,81 @@ models:
               arguments:
                 to: ref('stg_categories')
                 field: category_id
+
+  - name: dim_customers
+    description: >
+      Customer dimension. Grain: one row per customer (same as
+      stg_customers). Plain latest-state dimension, not SCD2.
+      Table-materialized.
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_products
+    description: >
+      Product dimension, denormalized with seller and category names.
+      Grain: one row per product (same as stg_products). Plain
+      latest-state dimension, not SCD2. Table-materialized.
+    columns:
+      - name: product_id
+        tests:
+          - not_null
+          - unique
+
+      - name: seller_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_sellers')
+                field: seller_id
+
+      - name: category_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_categories')
+                field: category_id
+
+  - name: fact_orders
+    description: >
+      Order fact. Grain: one row per order -- order_items
+      pre-aggregated to order level (item_count, total_quantity)
+      before joining, so it can't fan out this grain; payments joins
+      1:1 by construction (uq_payments_order). Table-materialized and
+      partitioned by order_year/order_month. order_value_tier is an
+      ntile(3) split over total_amount, the one business rule that
+      survived after order_status_category was dropped for lack of
+      real status variation.
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+          - unique
+
+      - name: customer_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+
+      - name: order_value_tier
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3]
+                quote: false
+
+      - name: order_year
+        tests:
+          - not_null
+
+      - name: order_month
+        tests:
+          - not_null
