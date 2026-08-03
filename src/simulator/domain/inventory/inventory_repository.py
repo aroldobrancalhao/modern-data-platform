@@ -106,6 +106,35 @@ class InventoryRepository:
 
             return cursor.fetchone()
 
+    def get_restock_candidate_id(
+        self,
+        low_stock_threshold: int,
+    ) -> UUID | None:
+        """
+        Prefers a row already below `low_stock_threshold` (restocking
+        the neediest inventory first), falling back to a uniformly
+        random one when nothing qualifies -- `(available_quantity <
+        threshold) DESC` sorts any qualifying rows first (Postgres
+        orders `true` before `false` in `DESC`), `random()` breaks ties
+        within whichever group ends up first. One query either way, no
+        extra round trip for the common case where a low-stock row
+        exists.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT inventory_id
+                FROM marketplace.inventories
+                ORDER BY (available_quantity < %s) DESC, random()
+                LIMIT 1
+                """,
+                (low_stock_threshold,),
+            )
+
+            row = cursor.fetchone()
+
+        return row[0] if row else None
+
     def get_product(
         self,
         product_id,
