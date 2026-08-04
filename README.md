@@ -385,9 +385,12 @@ The `marketplace` schema's initial 17 tables come from
 Postgres on first container boot -- Alembic (`alembic/`, `alembic.ini`
 at the repo root) takes over from there for every change after that.
 Alembic uses `postgresql+psycopg2://` here, not the app's usual
-psycopg v3 -- `apache-airflow-core` pins SQLAlchemy below 2.0, which has
-no v3 dialect (see `docs/architecture/roadmap-next-steps.md`'s Airflow
-upgrade entry for why, and when that goes away).
+psycopg v3 -- originally because `apache-airflow-core` pinned SQLAlchemy
+below 2.0, which has no v3 dialect. Airflow is now on 3.3.0 (SQLAlchemy
+2.0 unified across the platform, see ADR-0008), so that constraint no
+longer holds; `alembic/env.py` itself hasn't been switched over to
+`postgresql+psycopg://` yet -- a small, undone follow-up, not a current
+blocker.
 
 ## Run the simulator
 
@@ -510,7 +513,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 - ✅ Debezium (connector running, capturing all `marketplace` tables)
 - ✅ Kafka (broker up, topics created on first captured change)
 - ✅ Bronze Consumer: continuous Kafka consumer streaming Debezium CDC events straight into Bronze Delta tables via `deltalake` (no Spark), independent from Airflow (see ADR-0008), validated end to end against real Postgres/Debezium/Kafka (`-m real_kafka`)
-- ⬜ Real Airflow DAG orchestrating the pipeline end to end (today the pipeline is triggered manually via `databricks bundle run`/CLI scripts, not an Airflow DAG -- only placeholder validation DAGs exist)
+- ✅ Real Airflow DAG (`marketplace_batch_pipeline`, Airflow 3.3.0) orchestrating the pipeline end to end -- Postgres extraction (7 entities) -> Databricks `full_pipeline` -> `dbt run`/`dbt test --select gold`, validated with a real manual trigger against real Postgres/S3/Databricks/Athena
 
 ## Phase 3 — Data Lake
 
