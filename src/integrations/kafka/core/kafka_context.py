@@ -41,6 +41,7 @@ class KafkaContext:
     def create_consumer(
         self,
         group_id: str,
+        enable_auto_commit: bool = True,
     ) -> Consumer:
         """
         Creates a new Consumer configured for the given consumer
@@ -52,11 +53,20 @@ class KafkaContext:
         responsible for keeping and reusing the returned instance
         across repeated polls instead of creating a new one every
         time.
+
+        ``enable_auto_commit`` defaults to True (confluent-kafka's own
+        default), matching every existing caller. Pass False for a
+        consumer whose caller wants to commit offsets manually only
+        after the consumed message has been durably processed (e.g.
+        the Bronze Consumer -- see ADR-0008's streaming flow -- commits
+        only after a micro-batch is written to Delta, for at-least-once
+        delivery).
         """
         return Consumer(
             {
                 "bootstrap.servers": self._settings.bootstrap_servers,
                 "group.id": group_id,
                 "auto.offset.reset": "earliest",
+                "enable.auto.commit": enable_auto_commit,
             }
         )

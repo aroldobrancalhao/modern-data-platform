@@ -419,6 +419,27 @@ like it died silently mid-line with no error at all. This doesn't fix
 the underlying failure -- it just guarantees you can see why it
 failed.
 
+## Run the Bronze Consumer
+
+```bash
+PYTHONPATH=src uv run python scripts/run_bronze_consumer.py
+```
+
+Long-running process: consumes Debezium change events for all 16
+streaming entities directly off Kafka and writes them to their Bronze
+Delta tables via `deltalake` (no Spark) -- the streaming half of
+ADR-0008's flow, independent from Airflow. `PYTHONPATH=src` is
+required for the same reason as the simulator, above. Stop with
+Ctrl+C.
+
+Validated end to end against real Postgres/Debezium/Kafka/Delta (see
+`tests/integration/kafka/test_bronze_consumer_real_kafka.py`, run with
+`-m real_kafka`). This phase's known limitations -- no Dead Letter
+Queue, no distributed lock against the batch flow writing the same
+Bronze tables, deletes landing as regular appends rather than deletes
+(the domain already soft-deletes via `deleted_at`) -- are documented
+in `src/streaming/consumers/bronze_consumer.py`'s module docstring.
+
 ## Databricks authentication (local)
 
 `DatabricksComputeProvider` delegates authentication entirely to the
@@ -488,7 +509,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 - ✅ PostgreSQL (populated by the simulator)
 - ✅ Debezium (connector running, capturing all `marketplace` tables)
 - ✅ Kafka (broker up, topics created on first captured change)
-- ⬜ Continuous Kafka consumer feeding the pipeline (messaging capability exists and is tested; no long-running consumer loop yet)
+- ✅ Bronze Consumer: continuous Kafka consumer streaming Debezium CDC events straight into Bronze Delta tables via `deltalake` (no Spark), independent from Airflow (see ADR-0008), validated end to end against real Postgres/Debezium/Kafka (`-m real_kafka`)
 - ⬜ Real Airflow DAG orchestrating the pipeline end to end (today the pipeline is triggered manually via `databricks bundle run`/CLI scripts, not an Airflow DAG -- only placeholder validation DAGs exist)
 
 ## Phase 3 — Data Lake

@@ -56,9 +56,10 @@ class KafkaMessagingProvider(MessagingProvider):
         topic: str,
         group_id: str,
         timeout_seconds: float = 1.0,
+        auto_commit: bool = True,
     ) -> Message | None:
 
-        consumer = self._resolve_consumer(topic, group_id)
+        consumer = self._resolve_consumer(topic, group_id, auto_commit)
 
         record = consumer.poll(timeout_seconds)
 
@@ -70,10 +71,28 @@ class KafkaMessagingProvider(MessagingProvider):
 
         return self._to_message(record)
 
+    def commit(
+        self,
+        topic: str,
+        group_id: str,
+    ) -> None:
+        cache_key = (topic, group_id)
+
+        consumer = self._consumers.get(cache_key)
+
+        if consumer is None:
+            raise RuntimeError(
+                f"commit() called for ({topic!r}, {group_id!r}) before "
+                "any consume() call resolved a consumer for that pair."
+            )
+
+        consumer.commit(asynchronous=False)
+
     def _resolve_consumer(
         self,
         topic: str,
         group_id: str,
+        auto_commit: bool = True,
     ) -> Consumer:
         """
         Reuses one Consumer per (topic, group_id) pair across calls.
@@ -83,12 +102,19 @@ class KafkaMessagingProvider(MessagingProvider):
         the MessagingProvider contract) -- creating a new Consumer on
         every call would pay that cost every time, and could easily
         never return a message within timeout_seconds.
+
+        ``auto_commit`` only has an effect the first time a given
+        (topic, group_id) pair is resolved -- see consume()'s
+        docstring.
         """
 
         cache_key = (topic, group_id)
 
         if cache_key not in self._consumers:
-            consumer = self._context.create_consumer(group_id)
+            consumer = self._context.create_consumer(
+                group_id,
+                enable_auto_commit=auto_commit,
+            )
             consumer.subscribe([topic])
             self._consumers[cache_key] = consumer
 

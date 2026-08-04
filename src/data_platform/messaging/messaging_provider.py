@@ -49,6 +49,7 @@ class MessagingProvider(BaseProvider, ABC):
         topic: str,
         group_id: str,
         timeout_seconds: float = 1.0,
+        auto_commit: bool = True,
     ) -> Message | None:
         """
         Polls a single message from a topic.
@@ -57,5 +58,33 @@ class MessagingProvider(BaseProvider, ABC):
         timeout_seconds. This is a single poll, not a blocking loop --
         callers that want to keep consuming are responsible for
         calling this repeatedly.
+
+        ``auto_commit`` defaults to True, matching every caller before
+        this parameter existed. Pass False when the caller intends to
+        call ``commit()`` explicitly once the message (or a batch it
+        belongs to) has been durably processed -- the underlying
+        consumer for a given (topic, group_id) pair is created once
+        and reused, so this only takes effect on the *first* consume()
+        call for that pair; passing a different value on a later call
+        for the same pair has no effect until the process restarts.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def commit(
+        self,
+        topic: str,
+        group_id: str,
+    ) -> None:
+        """
+        Commits offsets for the consumer resolved by a prior
+        consume(topic, group_id, ...) call, up to its current
+        position.
+
+        Only meaningful after at least one consume() call for the same
+        (topic, group_id) pair -- there is nothing to commit otherwise.
+        Intended for callers that passed auto_commit=False to
+        consume(), to confirm processing explicitly instead of relying
+        on Kafka's periodic auto-commit.
         """
         raise NotImplementedError

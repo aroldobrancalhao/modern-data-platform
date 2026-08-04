@@ -18,17 +18,6 @@ rather than tied to `SequentialExecutor` specifically — so a future
 should not require changes to `Stage`, `ProcessingContext` or
 `Pipeline`. It has not been written or tested yet.
 
-## Kafka consumer loop (real streaming)
-
-`MessagingProvider`, `KafkaMessagingProvider` and
-`MessagingContextWriter` exist and are tested against the real local
-Kafka broker (Fases M1–M3), proving a Stage can consume one message
-and publish it into the `ProcessingContext`. The continuous loop that
-listens to a topic and triggers a Pipeline per message (the "Bronze
-Consumer" of the streaming flow described in ADR-0008) does not exist
-yet. It also depends on the simulator actually running, so there is
-real business data flowing through the Debezium topics to consume.
-
 ## StorageLocation silently mistargets trailing-slash S3 keys
 
 `StorageLocation.__post_init__` normalizes `key` via
