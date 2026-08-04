@@ -1,0 +1,13 @@
+modern_data_platform:
+  target: dev
+  outputs:
+    dev:
+      type: athena
+      s3_staging_dir: s3://mdp-datalake-dev-857854758128/athena/
+      s3_data_dir: s3://mdp-datalake-dev-857854758128/gold/
+      s3_data_naming: schema_table
+      region_name: sa-east-1
+      work_group: mdp-athena-dev
+      database: awsdatacatalog
+      schema: mdp_silver_dev
+      threads: 4

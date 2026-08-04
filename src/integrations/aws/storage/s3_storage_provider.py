@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from typing import BinaryIO
 from typing import Iterable
 
 from botocore.exceptions import ClientError
-from mypy_boto3_s3.client import S3Client
 
 from data_platform.storage import StorageProvider
 from data_platform.storage.models import StorageLocation
@@ -14,6 +14,9 @@ from data_platform.storage.models import StorageObject
 from integrations.aws.storage.error_mapper import AwsStorageErrorMapper
 from integrations.aws.storage.mapper import AwsStorageMapper
 from data_platform.contracts.base_provider import BaseProvider
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
 
 
 class S3StorageProvider(

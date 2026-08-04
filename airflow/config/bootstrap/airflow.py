@@ -159,11 +159,20 @@ class AirflowManager:
                 "conn_id": "aws_default",
                 "conn_type": "aws",
                 "description": "Default AWS connection",
+                "login": self._env("AWS_ACCESS_KEY_ID"),
+                "password": self._env("AWS_SECRET_ACCESS_KEY"),
                 "extra": json.dumps(
                     {
                         "region_name": outputs["aws_region"],
                     }
                 ),
+            },
+            {
+                "conn_id": "databricks_default",
+                "conn_type": "databricks",
+                "description": "Default Databricks connection",
+                "host": self._env("DATABRICKS_HOST"),
+                "password": self._env("DATABRICKS_TOKEN"),
             },
             {
                 "conn_id": "postgres_marketplace",
