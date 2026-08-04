@@ -1,16 +1,10 @@
 """
-Why this uses psycopg2 (`postgresql+psycopg2://`) while the rest of the
-app uses psycopg v3:
-
-apache-airflow-core (a hard dependency of this monorepo) pins
-`sqlalchemy[asyncio]<2.0,>=1.4.49` -- Alembic resolves against that same
-SQLAlchemy 1.4 in this venv, and SQLAlchemy 1.4 has no `postgresql+psycopg`
-(v3) dialect at all (added only in SQLAlchemy 2.0). psycopg2 isn't
-installed anywhere else in this project -- it's a dependency added
-specifically for Alembic's own connection here, nothing else should use
-it. Revisit once Airflow is upgraded to 3.2.0+ (which requires
-SQLAlchemy 2.0, see roadmap-next-steps.md) -- at that point this can
-switch to `postgresql+psycopg://` and match the app's driver.
+Uses `postgresql+psycopg://` (psycopg v3), same driver as the rest of
+the app -- SQLAlchemy 2.0 is what apache-airflow-core (3.3.0+) resolves
+to in this venv, and 2.0 is the first SQLAlchemy version with a v3
+dialect at all. Alembic ran on psycopg2 for a while before that (see
+git history), specifically because SQLAlchemy was pinned below 2.0 back
+then.
 
 There are no ORM models in this codebase (raw psycopg3 SQL everywhere),
 so `target_metadata` stays None -- `autogenerate` has nothing to diff
@@ -38,7 +32,7 @@ if config.config_file_name is not None:
 _postgres_settings = PostgresSettings()
 config.set_main_option(
     "sqlalchemy.url",
-    f"postgresql+psycopg2://{_postgres_settings.user}:{_postgres_settings.password}"
+    f"postgresql+psycopg://{_postgres_settings.user}:{_postgres_settings.password}"
     f"@{_postgres_settings.host}:{_postgres_settings.port}/{_postgres_settings.database}",
 )
 

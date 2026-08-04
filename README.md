@@ -383,14 +383,9 @@ PYTHONPATH=src uv run alembic upgrade head
 The `marketplace` schema's initial 17 tables come from
 `infrastructure/docker/postgres/init/*.sql`, run automatically by
 Postgres on first container boot -- Alembic (`alembic/`, `alembic.ini`
-at the repo root) takes over from there for every change after that.
-Alembic uses `postgresql+psycopg2://` here, not the app's usual
-psycopg v3 -- originally because `apache-airflow-core` pinned SQLAlchemy
-below 2.0, which has no v3 dialect. Airflow is now on 3.3.0 (SQLAlchemy
-2.0 unified across the platform, see ADR-0008), so that constraint no
-longer holds; `alembic/env.py` itself hasn't been switched over to
-`postgresql+psycopg://` yet -- a small, undone follow-up, not a current
-blocker.
+at the repo root) takes over from there for every change after that,
+over `postgresql+psycopg://` (psycopg v3), the same driver as the rest
+of the app.
 
 ## Run the simulator
 
