@@ -42,6 +42,8 @@ from data_platform.processing.core.processing_context import (
 from data_platform.processing.executor.sequential_executor import (
     SequentialExecutor,
 )
+from data_platform.processing.logging.logging_hook import LoggingHook
+from data_platform.processing.tracing.tracing_hook import TracingHook
 from data_platform.providers.provider_factory import ProviderFactory
 
 DATABASE = "mdp_silver_dev"
@@ -83,7 +85,11 @@ async def _register_one(
         ),
     )
 
-    result = await SequentialExecutor().execute(pipeline, context)
+    executor = SequentialExecutor()
+    executor.register_hooks(LoggingHook())
+    executor.register_hooks(TracingHook())
+
+    result = await executor.execute(pipeline, context)
 
     if result.status != ExecutionStatus.COMPLETED:
         stage_result = result.stage_results[0]

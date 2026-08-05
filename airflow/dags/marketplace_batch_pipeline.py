@@ -115,6 +115,8 @@ def marketplace_batch_pipeline():
         from data_platform.processing.extraction.postgres_extraction_stage import (
             PostgresExtractionStage,
         )
+        from data_platform.processing.logging.logging_hook import LoggingHook
+        from data_platform.processing.tracing.tracing_hook import TracingHook
         from data_platform.providers.provider_factory import ProviderFactory
         from data_platform.storage.config import StorageConfig
         from data_platform.storage.models import StorageLocation
@@ -180,8 +182,12 @@ def marketplace_batch_pipeline():
                     ),
                 )
 
+                executor = SequentialExecutor()
+                executor.register_hooks(LoggingHook())
+                executor.register_hooks(TracingHook())
+
                 result = asyncio.run(
-                    SequentialExecutor().execute(pipeline, context)
+                    executor.execute(pipeline, context)
                 )
 
                 if result.status != ExecutionStatus.COMPLETED:

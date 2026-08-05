@@ -52,6 +52,8 @@ from data_platform.processing.extraction.postgres_extraction_stage import (
 from data_platform.processing.core.context_keys.storage_keys import (
     StorageKeys,
 )
+from data_platform.processing.logging.logging_hook import LoggingHook
+from data_platform.processing.tracing.tracing_hook import TracingHook
 from data_platform.providers.provider_factory import ProviderFactory
 
 from integrations.postgres.config import PostgresSettings
@@ -97,7 +99,11 @@ async def _extract_one(
         ),
     )
 
-    result = await SequentialExecutor().execute(pipeline, context)
+    executor = SequentialExecutor()
+    executor.register_hooks(LoggingHook())
+    executor.register_hooks(TracingHook())
+
+    result = await executor.execute(pipeline, context)
 
     if result.status != ExecutionStatus.COMPLETED:
         stage_result = result.stage_results[0]
