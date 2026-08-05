@@ -390,6 +390,8 @@ The local environment includes:
 - Debezium
 - Airflow
 - Redis (Celery broker for Airflow)
+- Bronze Consumer (containerized, see "Run the Bronze Consumer" below)
+- Prometheus + Grafana + Pushgateway + statsd-exporter (see "Phase 6 — Observability")
 
 ## Apply database migrations
 
@@ -436,6 +438,15 @@ failed.
 
 ## Run the Bronze Consumer
 
+Runs as its own container (`bronze-consumer`, `infrastructure/docker/streaming/Dockerfile`)
+as part of `docker compose up -d` -- no separate step needed. It's a
+plain `python:3.12-slim` image with the project's own dependencies
+installed via `uv sync` from `pyproject.toml`/`uv.lock` (code `COPY`'d
+in, not volume-mounted -- rebuild the image, `docker compose build
+bronze-consumer`, after a `src/` change under it).
+
+For local iteration without a rebuild, run it directly instead:
+
 ```bash
 PYTHONPATH=src uv run python scripts/run_bronze_consumer.py
 ```
@@ -452,8 +463,18 @@ Validated end to end against real Postgres/Debezium/Kafka/Delta (see
 `-m real_kafka`). This phase's known limitations -- no Dead Letter
 Queue, no distributed lock against the batch flow writing the same
 Bronze tables, deletes landing as regular appends rather than deletes
-(the domain already soft-deletes via `deleted_at`) -- are documented
-in `src/streaming/consumers/bronze_consumer.py`'s module docstring.
+(the domain already soft-deletes via `deleted_at`), and a round-robin
+poll loop that is throughput-bound under a large backlog (see
+`docs/architecture/roadmap-next-steps.md`) -- are documented in
+`src/streaming/consumers/bronze_consumer.py`'s module docstring.
+
+Exposes Prometheus metrics on `:9200/metrics` (write duration, records
+written, write failures, messages consumed, consumer lag -- see
+"Phase 6 — Observability" below); the container's own AWS credentials
+need `AWS_REGION`/`AWS_DEFAULT_REGION` set explicitly (unlike the rest
+of the project's S3 access, which goes through boto3 --
+`write_deltalake()`'s pure-Rust S3 client doesn't follow a
+cross-region redirect the way boto3 does).
 
 ## Databricks authentication (local)
 
@@ -547,8 +568,12 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 
 ## Phase 6 — Observability
 
-- 🔶 Logging: `structlog` adopted for structured JSON logging, replacing bare `logging.getLogger` -- unified across the processing framework (`ConsoleLogger`/`ConsoleTracer`, plugged into `SequentialExecutor` via `LoggingHook`/`TracingHook`) and streaming (`data_platform.monitoring.logger.get_logger`). A single `configure_logging()` bootstrap (`data_platform/observability/logging_config.py`) is called at every real entry point (Airflow DAG task, one-off scripts, Bronze Consumer, Airflow bootstrap script), validated live against real Airflow task logs and the real Bronze Consumer. Airflow's own task logs now also ship to the real `/mdp/dev/airflow` CloudWatch Log Group (`CloudwatchTaskHandler`, `AIRFLOW__LOGGING__REMOTE_*` in `docker-compose.yml`, ARN kept out of code via `AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN` in `.env`), in parallel with the local files under `/opt/airflow/logs` -- validated live with a real task run and a real `aws logs get-log-events` readback. The other 5 log groups (Athena, Databricks, Glue, platform, Terraform) and Grafana/Prometheus still not wired.
-- ⬜ Metrics
+- ✅ Logging: `structlog` adopted for structured JSON logging, replacing bare `logging.getLogger` -- unified across the processing framework (`ConsoleLogger`/`ConsoleTracer`, plugged into `SequentialExecutor` via `LoggingHook`/`TracingHook`) and streaming (`data_platform.monitoring.logger.get_logger`). A single `configure_logging()` bootstrap (`data_platform/observability/logging_config.py`) is called at every real entry point (Airflow DAG task, one-off scripts, Bronze Consumer, Airflow bootstrap script), validated live against real Airflow task logs and the real Bronze Consumer. Airflow's own task logs now also ship to the real `/mdp/dev/airflow` CloudWatch Log Group (`CloudwatchTaskHandler`, `AIRFLOW__LOGGING__REMOTE_*` in `docker-compose.yml`, ARN kept out of code via `AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN` in `.env`), in parallel with the local files under `/opt/airflow/logs` -- validated live with a real task run and a real `aws logs get-log-events` readback. The other 5 log groups (Athena, Databricks, Glue, platform, Terraform) not wired.
+- ✅ Metrics: `MetricsHook`/`StatisticsHook` (dead code -- an in-process, home-grown registry never scraped by anything) replaced by real `prometheus_client` instrumentation across 3 sources, all scraped by a real Prometheus (`infrastructure/docker/monitoring/prometheus/prometheus.yml`, `scrape_interval: 15s`):
+  - **Processing framework**: `PrometheusHook` (`data_platform/processing/metrics/prometheus_metrics_hook.py`, same shape as `LoggingHook`/`TracingHook`) emits `mdp_pipeline_duration_seconds`, `mdp_stage_duration_seconds`, `mdp_stage_executions_total` and `mdp_pipeline_last_run_timestamp_seconds`, registered in all 3 real entry points (`extract_postgres` DAG task, `run_postgres_extraction_once.py`, `run_silver_catalog_registration_once.py`) and pushed to a real Pushgateway (`PrometheusHook.push(job=...)`) once each run finishes -- these are short-lived processes, not something Prometheus can scrape directly. Validated live: a real `extract_postgres` run (7 entities) landed real per-entity duration/status series in the Pushgateway under `job="extract_postgres"`, scraped by Prometheus with `honor_labels: true` so the pushed `job` label survives instead of being overwritten.
+  - **Airflow**: native metrics via `AIRFLOW__METRICS__STATSD_ON` -> `statsd-exporter` (mapping config: `monitoring/statsd-exporter/mapping.yml`, covering dagrun/task duration, task finish state, pool slots, scheduler heartbeat). Validated live: real `airflow_pool_*` and `airflow_scheduler_heartbeat_total` series observed at `statsd-exporter:9102/metrics`, correctly labeled (not baked into the metric name).
+  - **Bronze Consumer**: module-level metrics (`mdp_bronze_write_duration_seconds`, `mdp_bronze_records_written_total`, `mdp_bronze_write_failures_total`, `mdp_bronze_messages_consumed_total`, `mdp_bronze_consumer_lag`) exposed on `:9200/metrics`, scraped directly (it's long-running, unlike the two sources above). `mdp_bronze_consumer_lag` required extending `MessagingProvider` with `consumer_lag(topic, group_id)` (implemented in `KafkaMessagingProvider` via `assignment()`/`position()`/`get_watermark_offsets()`). Validated live against a real historical backlog (see `docs/architecture/roadmap-next-steps.md` for the throughput limitation this surfaced).
+  - Grafana provisions the Prometheus datasource automatically (`monitoring/grafana/provisioning/datasources/prometheus.yml`) -- validated live via `/api/datasources/{uid}/health` ("Successfully queried the Prometheus API"). No dashboards built yet.
 - ⬜ Alerts
 
 ## Phase 7 — CI/CD

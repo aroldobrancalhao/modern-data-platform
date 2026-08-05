@@ -199,3 +199,82 @@ scoped to a single task) did. Use `dags trigger` -- not `tasks test`
 -- whenever validating something that depends on the real execution
 path, not just task logic correctness.
 
+## bronze-consumer's 1024M memory limit is tight under backlog catch-up
+
+Found live while validating Decision 4 (Prometheus + Grafana):
+containerizing the Bronze Consumer for the first time made it exercise
+a real historical backlog (Kafka topics never consumed before this
+sprint, `mdp_bronze_consumer_lag` showed 68K-282K messages per topic)
+-- the original 512M `deploy.resources.limits.memory` estimate was
+sized from idle footprint, not real load, and the process hit a real
+kernel cgroup OOM kill (`dmesg`: `Memory cgroup out of memory ...
+anon-rss:511428kB`, right at the ceiling) while writing that backlog to
+Delta. Root cause of the baseline being higher than expected:
+`data_platform.bootstrap()` eagerly registers every provider (AWS,
+Databricks, Airflow, Kafka) regardless of which one a caller actually
+needs -- `run_bronze_consumer.py` only uses Kafka, but still pays for
+`boto3`, `databricks-sdk` and the rest of that import graph.
+
+Raised to 1024M, which held under the same catch-up load, but stayed
+close to the ceiling throughout: RSS observed at ~974-1000MiB over a
+15-minute window (steady, no upward trend -- ruling out a leak in that
+window), i.e. 95-98% utilization the whole time. This was **not** a
+no-backlog steady-state measurement -- the backlog was still draining
+throughout that window (see the next entry) and never emptied, so
+whether RSS would actually drop once the backlog is gone is still
+unconfirmed.
+
+**Revisit if**: this OOMs again at 1024M (raise further -- host RAM
+allowing, see the swap-pressure entry below), or if the Bronze
+Consumer is ever taken offline for an extended period and has to
+catch up a similarly large backlog again on restart.
+
+## Bronze Consumer's round-robin poll loop is throughput-bound, not I/O-bound
+
+Found live while validating Decision 4, watching the real backlog
+(above) drain: `mdp_bronze_consumer_lag` for `products` moved from
+271312 to 271200 in 5m26s -- ~20 messages/min. At that rate, fully
+draining a single topic's 68K-282K backlog is a 57-hour-to-9-day
+proposition, not minutes.
+
+Root cause, structural, not a bug: `run_bronze_consumer`'s loop calls
+`provider.consume()` once per topic per iteration (a single
+`Consumer.poll()`, one message), round-robin across all 16 entities,
+and each buffer flush (up to `_MAX_BATCH_SIZE=100` records) serializes
+a real `write_deltalake()` S3 call inline before moving to the next
+entity. Throughput is capped by the sum of those per-entity S3 write
+latencies per cycle, not by Kafka's own throughput or network
+bandwidth -- confirmed separately that a single manual `write_deltalake()`
+call completes in a few hundred ms to a few seconds.
+
+**Fix would be**: batch-poll each topic (`consume()` returning many
+messages per call instead of one) and/or flush different entities'
+buffers concurrently instead of serially in the same loop iteration.
+
+**Not done now**: out of scope for Decision 4 (observability
+instrumentation, not consumer throughput) -- the metric this sprint
+added (`mdp_bronze_consumer_lag`) is what makes this bottleneck visible
+in Prometheus/Grafana going forward, which is the actual point; fixing
+the bottleneck itself is separate follow-up work.
+
+## Host RAM stays under real pressure with the full local stack running
+
+`free -h`, checked live while validating Decision 4 with all 16
+containers up (11 pre-existing + 5 new observability services):
+2.7Gi/4Gi swap in use, ~2Gi "available" out of 7.8Gi total -- even
+after the `.wslconfig` fix earlier in this sprint (`memory=8GB,
+swap=4GB`) resolved the original blocker. This is a host-wide symptom
+that no single container's resource limit fixes -- every service
+sized individually within its own conservative ceiling, but 16 of them
+running simultaneously still adds up.
+
+**Possible future action**: stop non-essential services (e.g.
+`debezium-connect`, and by extension the CDC-dependent chain) when not
+actively testing the streaming path, via Docker Compose profiles or
+just a documented `docker compose stop <services>` command, instead of
+keeping all ~16 containers up at all times during local development.
+Not implemented now -- needs deciding which services are safe to stop
+independently (e.g. `debezium-connect` down doesn't affect
+Postgres/Kafka/batch-only work) before turning it into an actual
+profile split.
+

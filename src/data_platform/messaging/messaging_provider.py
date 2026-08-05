@@ -88,3 +88,21 @@ class MessagingProvider(BaseProvider, ABC):
         on Kafka's periodic auto-commit.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def consumer_lag(
+        self,
+        topic: str,
+        group_id: str,
+    ) -> int | None:
+        """
+        Returns the total consumer lag for a previously resolved
+        (topic, group_id) pair -- the sum, across every partition
+        currently assigned to that consumer, of (that partition's
+        latest available offset - the consumer's current position in
+        it).
+
+        Returns None if (topic, group_id) hasn't been resolved yet by
+        a prior consume() call -- same contract as commit().
+        """
+        raise NotImplementedError

@@ -98,6 +98,16 @@ class FakeMessagingProvider(MessagingProvider):
         key = (topic, group_id)
         self.commits[key] = self.commits.get(key, 0) + 1
 
+    def consumer_lag(self, topic: str, group_id: str) -> int | None:
+        """
+        This fake has no partitions/offsets to speak of, so "lag" is
+        approximated as the number of messages still queued for
+        (topic, group_id) -- close enough to the real contract's
+        intent (unconsumed backlog) for what run_bronze_consumer's
+        tests need.
+        """
+        return len(self.queues.get((topic, group_id), []))
+
 
 class _FakeClock:
     """

@@ -13,12 +13,16 @@ USER airflow
 
 # Airflow provider packages (operators/hooks the DAGs use directly --
 # not part of the app's own pyproject.toml, which only tracks the
-# app's own runtime dependencies).
+# app's own runtime dependencies). statsd is here rather than below
+# for the same reason: it's required for
+# AIRFLOW__METRICS__STATSD_ON (see docker-compose.yml), not imported
+# by any src/ code.
 RUN pip install --no-cache-dir \
     apache-airflow-providers-amazon \
     apache-airflow-providers-postgres \
     apache-airflow-providers-http \
-    apache-airflow-providers-databricks
+    apache-airflow-providers-databricks \
+    "statsd>=4.0.1"
 
 # The full [project.dependencies] set from pyproject.toml, same
 # version floors -- every DAG that imports the project's own src/
@@ -40,6 +44,7 @@ RUN pip install --no-cache-dir \
     "faker>=40.28.1" \
     "httpx>=0.28.1" \
     "jinja2>=3.1.6" \
+    "prometheus-client>=0.21.0" \
     "psycopg2-binary>=2.9.12" \
     "psycopg[binary]>=3.3.4" \
     "pyarrow>=25.0.0" \

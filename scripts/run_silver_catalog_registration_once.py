@@ -44,6 +44,9 @@ from data_platform.processing.executor.sequential_executor import (
 )
 from data_platform.observability.logging_config import configure_logging
 from data_platform.processing.logging.logging_hook import LoggingHook
+from data_platform.processing.metrics.prometheus_metrics_hook import (
+    PrometheusHook,
+)
 from data_platform.processing.tracing.tracing_hook import TracingHook
 from data_platform.providers.provider_factory import ProviderFactory
 
@@ -62,6 +65,7 @@ ENTITIES: tuple[str, ...] = (
 async def _register_one(
     entity: str,
     provider_factory: ProviderFactory,
+    metrics_hook: PrometheusHook,
 ) -> None:
     stage = SilverCatalogRegistrationStage(
         id=f"register-silver-{entity}-once",
@@ -89,6 +93,7 @@ async def _register_one(
     executor = SequentialExecutor()
     executor.register_hooks(LoggingHook())
     executor.register_hooks(TracingHook())
+    executor.register_hooks(metrics_hook)
 
     result = await executor.execute(pipeline, context)
 
@@ -113,8 +118,14 @@ async def main() -> None:
         settings=Settings(),
     )
 
+    # One PrometheusHook shared across every entity in this run --
+    # see run_postgres_extraction_once.py's main() for why.
+    metrics_hook = PrometheusHook()
+
     for entity in ENTITIES:
-        await _register_one(entity, provider_factory)
+        await _register_one(entity, provider_factory, metrics_hook)
+
+    metrics_hook.push(job="silver_catalog_registration_once")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from typing import cast
 
 from confluent_kafka import Consumer
 from confluent_kafka import Message as ConfluentMessage
+from confluent_kafka import TopicPartition
 
 from data_platform.messaging.messaging_provider import MessagingProvider
 from data_platform.messaging.models import Message
@@ -87,6 +88,42 @@ class KafkaMessagingProvider(MessagingProvider):
             )
 
         consumer.commit(asynchronous=False)
+
+    def consumer_lag(
+        self,
+        topic: str,
+        group_id: str,
+    ) -> int | None:
+        consumer = self._consumers.get((topic, group_id))
+
+        if consumer is None:
+            return None
+
+        assignment = consumer.assignment()
+
+        if not assignment:
+            return 0
+
+        positions = consumer.position(assignment)
+
+        lag = 0
+
+        for partition in positions:
+            # position() returns OFFSET_INVALID (-1001) for a
+            # partition the consumer has never consumed from yet --
+            # treat that as "as far behind as the broker's own low
+            # watermark", not 0, so an idle-but-assigned partition
+            # doesn't understate lag.
+            low, high = consumer.get_watermark_offsets(
+                TopicPartition(partition.topic, partition.partition),
+                cached=False,
+            )
+
+            current = partition.offset if partition.offset >= 0 else low
+
+            lag += max(high - current, 0)
+
+        return lag
 
     def _resolve_consumer(
         self,

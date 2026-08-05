@@ -108,6 +108,17 @@ x-airflow-common:
     AIRFLOW__LOGGING__REMOTE_LOGGING: 'True'
     AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: 'aws_default'
     AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: 'cloudwatch://${AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN}'
+
+    # Native Airflow metrics (scheduler heartbeat, DAG/task duration,
+    # pool slots, ...) -- emitted via StatsD, converted into labeled
+    # Prometheus metrics by the statsd-exporter service (mapping
+    # config: monitoring/statsd-exporter/mapping.yml) and scraped
+    # from there by Prometheus. Requires the `statsd` pip package,
+    # installed in airflow/Dockerfile.
+    AIRFLOW__METRICS__STATSD_ON: 'True'
+    AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+    AIRFLOW__METRICS__STATSD_PORT: 8125
+    AIRFLOW__METRICS__STATSD_PREFIX: airflow
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
   volumes:
@@ -669,6 +680,215 @@ services:
       airflow-bootstrap:
         condition: service_completed_successfully
 
+  # ------------------------------------------------------------------
+  # Observability stack (Sprint 13, Decision 4): Prometheus scrapes 3
+  # sources -- statsd-exporter (native Airflow metrics), pushgateway
+  # (short-lived processing-framework runs, via PrometheusHook) and
+  # bronze-consumer (scraped directly, long-running) -- Grafana reads
+  # from Prometheus. See monitoring/prometheus/prometheus.yml.
+  #
+  # Resource limits on all 5 services below are deliberately
+  # conservative: this is the same host whose RAM shortage paused
+  # this sprint before .wslconfig was fixed (memory=8GB, swap=4GB) --
+  # see docs/environment-inventory.md. Sized from each tool's own
+  # idle/small-workload footprint, not a fraction of total host RAM:
+  # pushgateway/statsd-exporter (64M) are stateless converters/
+  # in-memory stores holding a handful of metrics; prometheus/grafana
+  # (256M) have a real but small baseline (TSDB + UI process,
+  # 3 scrape targets, no dashboards yet); bronze-consumer (512M) is
+  # the outlier because pyarrow/deltalake/confluent-kafka's own
+  # baseline RSS is non-trivial even before any buffered records.
+  # Total ceiling ~1.1GiB, against ~2.2GiB available at the time this
+  # was sized (free -h, all pre-existing services already running).
+  # ------------------------------------------------------------------
+
+  pushgateway:
+    image: prom/pushgateway:v1.11.3
+    container_name: mdp-pushgateway
+    restart: unless-stopped
+    ports:
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9091/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    networks:
+      - mdp-network
+
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.29.0
+    container_name: mdp-statsd-exporter
+    restart: unless-stopped
+    command:
+      - "--statsd.mapping-config=/etc/statsd-exporter/mapping.yml"
+      # statsd_exporter's own default is :9125, not the classic statsd
+      # port -- overridden to 8125 to match
+      # AIRFLOW__METRICS__STATSD_PORT (x-airflow-common-env) and
+      # Airflow's own default statsd_port, instead of the other way
+      # around. Found live: 0 packets/lines received at the exporter
+      # despite Airflow sending them (confirmed with a manual UDP
+      # send from mdp-airflow-scheduler) -- silently dropped, nothing
+      # was listening on 8125.
+      - "--statsd.listen-udp=:8125"
+    volumes:
+      - ./monitoring/statsd-exporter/mapping.yml:/etc/statsd-exporter/mapping.yml:ro
+    ports:
+      - "9102:9102"
+      - "8125:8125/udp"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9102/metrics"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    networks:
+      - mdp-network
+
+  bronze-consumer:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/streaming/Dockerfile
+    container_name: mdp-bronze-consumer
+    restart: unless-stopped
+    environment:
+      PLATFORM_MESSAGING_PROVIDER: kafka
+      KAFKA_BOOTSTRAP_SERVER: kafka:9092
+      # resolve_bronze_schema() (data_platform.compute.bronze_schema)
+      # queries information_schema.columns for every entity at
+      # startup, before consuming a single Kafka message -- same
+      # Postgres PostgresSettings() defaults to "localhost", which
+      # doesn't resolve inside this container.
+      POSTGRES_HOST: postgres-marketplace
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      # write_deltalake() (the pure-Rust `deltalake` S3 client -- the
+      # only place in this project that talks to S3 without boto3,
+      # see bronze_consumer.py's module docstring) doesn't follow a
+      # cross-region redirect the way boto3 does: with no region
+      # configured, every write failed with "Received redirect
+      # without LOCATION" against the real bucket (mdp-datalake-dev,
+      # sa-east-1, not the SDK's us-east-1 default) -- found during
+      # this sprint's live validation, no image rebuild needed since
+      # it's config-only. Value from airflow/config/terraform_outputs.json
+      # (aws_region), same source docs/architecture/roadmap-next-steps.md
+      # already names for AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN.
+      AWS_REGION: sa-east-1
+      AWS_DEFAULT_REGION: sa-east-1
+    ports:
+      - "9200:9200"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres-marketplace:
+        condition: service_healthy
+      platform-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - "CMD"
+        - "/app/.venv/bin/python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://localhost:9200/metrics', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          # Raised from the originally planned 512M after a real
+          # kernel cgroup OOM kill (confirmed via dmesg: "Memory
+          # cgroup out of memory ... anon-rss:511428kB", right at the
+          # 512M ceiling) during live validation. Root cause:
+          # data_platform.bootstrap() eagerly registers every
+          # provider (AWS, Databricks, Airflow, Kafka) regardless of
+          # which one a caller actually needs -- run_bronze_consumer.py
+          # only uses Kafka, but still loads boto3, databricks-sdk
+          # and the rest of that graph. Not something to fix here
+          # (pre-existing, shared by every entry point) -- 1024M
+          # gives real headroom over the ~512MB+ observed peak
+          # instead of a number picked from idle-footprint guesses.
+          memory: 1024M
+    networks:
+      - mdp-network
+
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    container_name: mdp-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Local dev only -- keeps disk bounded, no need for long-term
+      # retention on a stack that gets torn down/rebuilt often.
+      - "--storage.tsdb.retention.time=7d"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - statsd-exporter
+      - pushgateway
+      - bronze-consumer
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    networks:
+      - mdp-network
+
+  grafana:
+    image: grafana/grafana:13.1.2
+    container_name: mdp-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    networks:
+      - mdp-network
+
 volumes:
 
   postgres_airflow_data:
@@ -684,6 +904,10 @@ volumes:
   airflow_config:
 
   airflow_plugins:
+
+  prometheus_data:
+
+  grafana_data:
 
 networks:
 

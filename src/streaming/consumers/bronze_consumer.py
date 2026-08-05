@@ -41,6 +41,7 @@ from typing import Any
 
 import pyarrow as pa
 from deltalake import write_deltalake
+from prometheus_client import Counter, Gauge, Histogram
 
 from data_platform.compute.bronze_schema import coerce_record, resolve_bronze_schema
 from data_platform.messaging.messaging_provider import MessagingProvider
@@ -50,6 +51,44 @@ from data_platform.storage.config import StorageConfig
 from integrations.kafka.messaging.debezium_envelope import decode_debezium_message
 
 logger = get_logger(__name__)
+
+# Module-level (default registry) rather than hook-based like the
+# processing framework's PrometheusHook: the Bronze Consumer is a
+# long-running process with no pipeline/stage lifecycle to hook into,
+# scraped directly by Prometheus (start_http_server, see
+# scripts/run_bronze_consumer.py) instead of pushed to the
+# Pushgateway.
+
+WRITE_DURATION = Histogram(
+    "mdp_bronze_write_duration_seconds",
+    "write_deltalake() duration for a Bronze micro-batch flush.",
+    labelnames=("entity",),
+)
+
+RECORDS_WRITTEN = Counter(
+    "mdp_bronze_records_written_total",
+    "Records written to a Bronze Delta table.",
+    labelnames=("entity",),
+)
+
+WRITE_FAILURES = Counter(
+    "mdp_bronze_write_failures_total",
+    "Bronze micro-batch flushes that failed to write.",
+    labelnames=("entity",),
+)
+
+MESSAGES_CONSUMED = Counter(
+    "mdp_bronze_messages_consumed_total",
+    "Debezium messages consumed off Kafka (decoded or not).",
+    labelnames=("entity", "topic"),
+)
+
+CONSUMER_LAG = Gauge(
+    "mdp_bronze_consumer_lag",
+    "Consumer lag (unread messages) reported by the MessagingProvider, "
+    "as of the last successful flush.",
+    labelnames=("entity", "topic"),
+)
 
 _TOPIC_PREFIX = "marketplace.marketplace."
 
@@ -184,6 +223,8 @@ def _buffer_message(
     value: bytes,
     buffer: _EntityBuffer,
 ) -> None:
+    MESSAGES_CONSUMED.labels(entity=entity, topic=topic).inc()
+
     try:
         change = decode_debezium_message(value)
     except Exception:
@@ -210,8 +251,11 @@ def _flush(
             schema=schema,
         )
 
-        write_deltalake(StorageConfig.bronze(entity), table, mode="append")
+        with WRITE_DURATION.labels(entity=entity).time():
+            write_deltalake(StorageConfig.bronze(entity), table, mode="append")
     except Exception:
+        WRITE_FAILURES.labels(entity=entity).inc()
+
         logger.exception(
             "Bronze write failed for entity '%s' (%d buffered records) -- "
             "offsets left uncommitted, will retry next cycle.",
@@ -221,6 +265,13 @@ def _flush(
         return
 
     provider.commit(topic, group_id=_CONSUMER_GROUP_ID)
+
+    RECORDS_WRITTEN.labels(entity=entity).inc(len(table))
+
+    lag = provider.consumer_lag(topic, group_id=_CONSUMER_GROUP_ID)
+
+    if lag is not None:
+        CONSUMER_LAG.labels(entity=entity, topic=topic).set(lag)
 
     buffer.clear()
 

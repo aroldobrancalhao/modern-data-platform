@@ -54,6 +54,9 @@ from data_platform.processing.core.context_keys.storage_keys import (
 )
 from data_platform.observability.logging_config import configure_logging
 from data_platform.processing.logging.logging_hook import LoggingHook
+from data_platform.processing.metrics.prometheus_metrics_hook import (
+    PrometheusHook,
+)
 from data_platform.processing.tracing.tracing_hook import TracingHook
 from data_platform.providers.provider_factory import ProviderFactory
 
@@ -76,6 +79,7 @@ async def _extract_one(
     entity: str,
     table_name: str,
     provider_factory: ProviderFactory,
+    metrics_hook: PrometheusHook,
 ) -> None:
     stage = PostgresExtractionStage(
         id=f"extract-{entity}-once",
@@ -103,6 +107,7 @@ async def _extract_one(
     executor = SequentialExecutor()
     executor.register_hooks(LoggingHook())
     executor.register_hooks(TracingHook())
+    executor.register_hooks(metrics_hook)
 
     result = await executor.execute(pipeline, context)
 
@@ -125,8 +130,16 @@ async def main() -> None:
         settings=Settings(),
     )
 
+    # One PrometheusHook shared across every entity in this run, so
+    # all of them land in the same CollectorRegistry and are pushed
+    # to the Pushgateway together, as a single batch, once the loop
+    # is done.
+    metrics_hook = PrometheusHook()
+
     for entity, table_name in ENTITIES:
-        await _extract_one(entity, table_name, provider_factory)
+        await _extract_one(entity, table_name, provider_factory, metrics_hook)
+
+    metrics_hook.push(job="postgres_extraction_once")
 
 
 if __name__ == "__main__":

@@ -119,6 +119,9 @@ def marketplace_batch_pipeline():
             configure_logging,
         )
         from data_platform.processing.logging.logging_hook import LoggingHook
+        from data_platform.processing.metrics.prometheus_metrics_hook import (
+            PrometheusHook,
+        )
         from data_platform.processing.tracing.tracing_hook import TracingHook
         from data_platform.providers.provider_factory import ProviderFactory
         from data_platform.storage.config import StorageConfig
@@ -138,6 +141,13 @@ def marketplace_batch_pipeline():
         storage_provider = provider_factory.create("aws.s3")
 
         counts: dict[str, int] = {}
+
+        # One PrometheusHook shared across every entity in this task
+        # run, so all of them land in the same CollectorRegistry and
+        # are pushed to the Pushgateway together, as a single batch,
+        # once the loop is done -- see run_postgres_extraction_once.py
+        # for the same pattern.
+        metrics_hook = PrometheusHook()
 
         with psycopg.connect(
             host=postgres_settings.host,
@@ -190,6 +200,7 @@ def marketplace_batch_pipeline():
                 executor = SequentialExecutor()
                 executor.register_hooks(LoggingHook())
                 executor.register_hooks(TracingHook())
+                executor.register_hooks(metrics_hook)
 
                 result = asyncio.run(
                     executor.execute(pipeline, context)
@@ -221,6 +232,8 @@ def marketplace_batch_pipeline():
                 counts[entity] = postgres_count
 
                 print(f"OK: '{entity}' -- {postgres_count} rows, verified.")
+
+        metrics_hook.push(job="extract_postgres")
 
         return counts
 

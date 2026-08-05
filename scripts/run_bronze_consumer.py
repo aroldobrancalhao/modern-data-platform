@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from typing import cast
 
+from prometheus_client import start_http_server
+
 from data_platform.bootstrap import bootstrap
 from data_platform.config.settings import Settings
 from data_platform.messaging.messaging_provider import MessagingProvider
@@ -43,9 +45,20 @@ from streaming.consumers.bronze_consumer import run_bronze_consumer
 
 logger = get_logger(__name__)
 
+# Scraped directly by Prometheus (job "bronze-consumer", see
+# monitoring/prometheus/prometheus.yml) -- unlike the processing
+# framework's PrometheusHook, this is a long-running process, so
+# there's no "end of run" to push metrics at; Pushgateway is for
+# short-lived batch tasks only (see PrometheusHook's docstring).
+_METRICS_PORT = 9200
+
 
 def main() -> None:
     configure_logging()
+
+    start_http_server(_METRICS_PORT)
+
+    logger.info("Metrics server started.", port=_METRICS_PORT)
 
     provider_factory = ProviderFactory(
         registry=bootstrap(),

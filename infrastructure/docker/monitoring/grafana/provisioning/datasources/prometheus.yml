@@ -1,0 +1,16 @@
+# Modern Data Platform
+#
+# Auto-provisions the Prometheus datasource on Grafana startup -- no
+# manual "Add data source" click-through needed. No dashboards
+# provisioned yet (Sprint 13, Decision 4): deliberately deferred until
+# there's real data flowing to build one against.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
