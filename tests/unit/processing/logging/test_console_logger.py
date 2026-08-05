@@ -21,4 +21,4 @@ def test_should_log_entry() -> None:
         )
     )
 
-    logger.log.assert_called_once()
+    logger.bind.return_value.info.assert_called_once()

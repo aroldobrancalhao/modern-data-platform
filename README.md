@@ -108,6 +108,7 @@ ADR-011).
 | Layer | Technology |
 |--------|------------|
 | Programming Language | Python 3.12 |
+| Structured Logging | structlog |
 | Database | PostgreSQL |
 | CDC | Debezium |
 | Streaming | Apache Kafka |
@@ -132,32 +133,48 @@ ADR-011).
 modern-data-platform/
 
 ├── docs/
-│   ├── architecture/
-│   ├── diagrams/
-│   ├── guides/
-│   └── roadmap/
+│   └── architecture/
 │
 ├── infrastructure/
 │   ├── terraform/
-│   └── environments/
+│   ├── docker/
+│   └── databricks/
 │
 ├── src/
-│   ├── analytics/
-│   ├── cloud/
 │   ├── common/
+│   ├── data_platform/
+│   │   ├── catalog/
+│   │   ├── compute/
+│   │   ├── config/
+│   │   ├── contracts/
+│   │   ├── datalake/
+│   │   ├── enums/
+│   │   ├── exceptions/
+│   │   ├── http/
+│   │   ├── identity/
+│   │   ├── messaging/
+│   │   ├── models/
+│   │   ├── monitoring/
+│   │   ├── notifications/
+│   │   ├── observability/
+│   │   ├── processing/
+│   │   ├── providers/
+│   │   ├── security/
+│   │   ├── storage/
+│   │   ├── types/
+│   │   └── workflow/
 │   ├── ingestion/
-│   ├── orchestration/
-│   ├── platform/
-│   ├── processing/
+│   ├── integrations/
 │   ├── quality/
+│   ├── simulator/
 │   └── streaming/
 │
-├── simulator/
-├── notebooks/
+├── airflow/
+├── alembic/
 ├── dbt/
-├── docker/
-├── tests/
-└── scripts/
+├── notebooks/
+├── scripts/
+└── tests/
 ```
 
 ---
@@ -530,7 +547,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 
 ## Phase 6 — Observability
 
-- ⬜ Logging
+- 🔶 Logging: `structlog` adopted for structured JSON logging, replacing bare `logging.getLogger` -- unified across the processing framework (`ConsoleLogger`/`ConsoleTracer`, plugged into `SequentialExecutor` via `LoggingHook`/`TracingHook`) and streaming (`data_platform.monitoring.logger.get_logger`). A single `configure_logging()` bootstrap (`data_platform/observability/logging_config.py`) is called at every real entry point (Airflow DAG task, one-off scripts, Bronze Consumer, Airflow bootstrap script), validated live against real Airflow task logs and the real Bronze Consumer. CloudWatch/Grafana/Prometheus shipping still not wired.
 - ⬜ Metrics
 - ⬜ Alerts
 

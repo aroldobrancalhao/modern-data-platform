@@ -36,6 +36,7 @@ from data_platform.bootstrap import bootstrap
 from data_platform.config.settings import Settings
 from data_platform.messaging.messaging_provider import MessagingProvider
 from data_platform.monitoring.logger import get_logger
+from data_platform.observability.logging_config import configure_logging
 from data_platform.providers.provider_factory import ProviderFactory
 
 from streaming.consumers.bronze_consumer import run_bronze_consumer
@@ -44,6 +45,8 @@ logger = get_logger(__name__)
 
 
 def main() -> None:
+    configure_logging()
+
     provider_factory = ProviderFactory(
         registry=bootstrap(),
         settings=Settings(),

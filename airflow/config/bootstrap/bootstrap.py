@@ -15,13 +15,13 @@ Execution flow:
 
 from __future__ import annotations
 
-import logging
+import structlog
 
 from bootstrap.airflow import AirflowManager
 from bootstrap.config import ConfigLoader
 from bootstrap.terraform import TerraformOutputs
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class Bootstrap:

@@ -52,6 +52,7 @@ from data_platform.processing.extraction.postgres_extraction_stage import (
 from data_platform.processing.core.context_keys.storage_keys import (
     StorageKeys,
 )
+from data_platform.observability.logging_config import configure_logging
 from data_platform.processing.logging.logging_hook import LoggingHook
 from data_platform.processing.tracing.tracing_hook import TracingHook
 from data_platform.providers.provider_factory import ProviderFactory
@@ -117,6 +118,8 @@ async def _extract_one(
 
 
 async def main() -> None:
+    configure_logging()
+
     provider_factory = ProviderFactory(
         registry=bootstrap(),
         settings=Settings(),

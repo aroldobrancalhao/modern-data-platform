@@ -42,6 +42,7 @@ from data_platform.processing.core.processing_context import (
 from data_platform.processing.executor.sequential_executor import (
     SequentialExecutor,
 )
+from data_platform.observability.logging_config import configure_logging
 from data_platform.processing.logging.logging_hook import LoggingHook
 from data_platform.processing.tracing.tracing_hook import TracingHook
 from data_platform.providers.provider_factory import ProviderFactory
@@ -105,6 +106,8 @@ async def _register_one(
 
 
 async def main() -> None:
+    configure_logging()
+
     provider_factory = ProviderFactory(
         registry=bootstrap(),
         settings=Settings(),

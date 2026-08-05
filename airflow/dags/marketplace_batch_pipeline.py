@@ -115,6 +115,9 @@ def marketplace_batch_pipeline():
         from data_platform.processing.extraction.postgres_extraction_stage import (
             PostgresExtractionStage,
         )
+        from data_platform.observability.logging_config import (
+            configure_logging,
+        )
         from data_platform.processing.logging.logging_hook import LoggingHook
         from data_platform.processing.tracing.tracing_hook import TracingHook
         from data_platform.providers.provider_factory import ProviderFactory
@@ -122,6 +125,8 @@ def marketplace_batch_pipeline():
         from data_platform.storage.models import StorageLocation
 
         from integrations.postgres.config import PostgresSettings
+
+        configure_logging()
 
         postgres_settings = PostgresSettings()
 

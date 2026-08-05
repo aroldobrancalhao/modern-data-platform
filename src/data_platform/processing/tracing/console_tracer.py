@@ -7,7 +7,9 @@ Console tracer.
 
 from __future__ import annotations
 
-import logging
+from typing import Any
+
+import structlog
 
 from data_platform.processing.tracing.trace import Trace
 from data_platform.processing.tracing.tracer import Tracer
@@ -21,23 +23,17 @@ class ConsoleTracer(Tracer):
     def __init__(
         self,
         *,
-        logger: logging.Logger | None = None,
+        logger: Any | None = None,
     ) -> None:
-        self._logger = logger or logging.getLogger(__name__)
+        self._logger = logger or structlog.get_logger(__name__)
 
     def record(
         self,
         trace: Trace,
     ) -> None:
-        self._logger.info(
-            (
-                "Trace execution_id=%s "
-                "pipeline=%s "
-                "duration=%s "
-                "spans=%d"
-            ),
-            trace.execution_id,
-            trace.pipeline_name,
-            trace.duration,
-            len(trace.spans),
-        )
+        self._logger.bind(
+            execution_id=trace.execution_id,
+            pipeline_name=trace.pipeline_name,
+            duration=trace.duration,
+            spans=len(trace.spans),
+        ).info("trace_recorded")
