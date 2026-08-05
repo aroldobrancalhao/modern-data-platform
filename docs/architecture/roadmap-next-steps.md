@@ -154,3 +154,48 @@ from v1 -- and a real fraud-detection capability depends on it. Deferred
 to a future v2 that includes Machine Learning; out of scope for the
 current version, not started.
 
+## Airflow remote logging is AWS-coupled by construction (accepted)
+
+`AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER` uses the `cloudwatch://`
+scheme (`CloudwatchTaskHandler`, `apache-airflow-providers-amazon`) --
+the log group ARN itself is kept out of code via
+`AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN` (`infrastructure/docker/.env`), but
+the *mechanism* (which remote logging handler class Airflow loads) is
+inherently provider-specific: S3/GCS/Azure remote logging use a
+different handler and connection type entirely, not a config value
+swap. There is no cloud-agnostic remote-logging abstraction in Airflow
+itself to build against. If this project ever migrates away from AWS,
+this handler (and the `aws_default` Connection it reads through)
+would need to be replaced outright, not reconfigured. Accepted
+consciously for now -- only the ARN/account/region value is kept
+out of tracked files, not the provider coupling itself.
+
+Separately, `AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN` is a value typed by
+hand into `infrastructure/docker/.env`, even though Terraform already
+computes this exact ARN (`module.cloudwatch_airflow.arn`,
+`infrastructure/terraform/modules/monitoring/cloudwatch/outputs.tf`)
+-- it just isn't exposed at the root level
+(`environments/dev/outputs.tf`) or piped into
+`airflow/config/terraform_outputs.json` the way `aws_region` and the
+other outputs already are (see `scripts/export-terraform-outputs.sh`
+and `airflow/config/bootstrap/airflow.py`). The correct long-term fix
+is wiring that output through the same pipeline so this value is
+derived from Terraform state instead of copy-pasted; not done here,
+kept as a manually-maintained value for now.
+
+## `airflow tasks test` does not exercise the real worker/remote-log path
+
+`airflow tasks test <dag> <task>` runs the task inline in the CLI
+process itself, not through the CeleryExecutor/worker. This matters
+for anything that depends on how a *real* scheduled/triggered task
+executes -- e.g. remote logging (`CloudwatchTaskHandler` is wired
+through the worker's task_runner, not the `tasks test` code path): a
+task that runs and logs successfully under `tasks test` proves
+nothing about whether its logs actually reach CloudWatch. Confirmed
+while validating Decision 3 (Airflow CloudWatch remote logging) --
+`tasks test` produced no CloudWatch log stream at all, while
+`airflow dags trigger` (paused immediately after, to keep the run
+scoped to a single task) did. Use `dags trigger` -- not `tasks test`
+-- whenever validating something that depends on the real execution
+path, not just task logic correctness.
+
