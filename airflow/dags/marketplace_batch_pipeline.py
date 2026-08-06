@@ -96,21 +96,15 @@ def marketplace_batch_pipeline():
 
         from data_platform.bootstrap import bootstrap
         from data_platform.config.settings import Settings
-        from data_platform.processing.core.context_keys.storage_keys import (
-            StorageKeys,
-        )
         from data_platform.processing.core.execution_metadata import (
             ExecutionMetadata,
-        )
-        from data_platform.processing.core.execution_status import (
-            ExecutionStatus,
         )
         from data_platform.processing.core.pipeline import Pipeline
         from data_platform.processing.core.processing_context import (
             ProcessingContext,
         )
-        from data_platform.processing.executor.sequential_executor import (
-            SequentialExecutor,
+        from data_platform.processing.executor.parallel_executor import (
+            ParallelExecutor,
         )
         from data_platform.processing.extraction.postgres_extraction_stage import (
             PostgresExtractionStage,
@@ -140,15 +134,22 @@ def marketplace_batch_pipeline():
 
         storage_provider = provider_factory.create("aws.s3")
 
-        counts: dict[str, int] = {}
-
         # One PrometheusHook shared across every entity in this task
         # run, so all of them land in the same CollectorRegistry and
         # are pushed to the Pushgateway together, as a single batch,
-        # once the loop is done -- see run_postgres_extraction_once.py
+        # once the run is done -- see run_postgres_extraction_once.py
         # for the same pattern.
         metrics_hook = PrometheusHook()
 
+        postgres_counts: dict[str, int] = {}
+
+        stage_by_entity: dict[str, PostgresExtractionStage] = {}
+
+        # Pre-pass, sequential and cheap (a count query + an idempotency
+        # list/delete per entity -- not the extraction itself): builds
+        # every Stage and captures each entity's real Postgres row
+        # count for the post-run verification below, before any of the
+        # 7 extractions actually runs concurrently.
         with psycopg.connect(
             host=postgres_settings.host,
             port=postgres_settings.port,
@@ -161,7 +162,7 @@ def marketplace_batch_pipeline():
 
                 with connection.cursor() as cursor:
                     cursor.execute(f"SELECT count(*) FROM {table_name}")
-                    postgres_count = cursor.fetchone()[0]
+                    postgres_counts[entity] = cursor.fetchone()[0]
 
                 # Idempotency: clear any objects a previous run of this
                 # DAG (or the one-off script) already landed, since
@@ -174,7 +175,7 @@ def marketplace_batch_pipeline():
                 for existing in storage_provider.list(prefix):
                     storage_provider.delete(existing.location)
 
-                stage = PostgresExtractionStage(
+                stage_by_entity[entity] = PostgresExtractionStage(
                     id=f"extract-{entity}",
                     name=f"Extract {entity.title()}",
                     provider_name="aws.s3",
@@ -184,54 +185,85 @@ def marketplace_batch_pipeline():
                     provider_factory=provider_factory,
                 )
 
-                pipeline = Pipeline(
-                    id=f"marketplace-batch-pipeline-extract-{entity}",
-                    name=f"Postgres Extraction - {entity}",
-                    stages=(stage,),
+        # All 7 extractions as a single parallel group: independent by
+        # construction (each reads its own Postgres table, writes its
+        # own raw/{entity}/ object, and returns its landed location on
+        # StageResult.output rather than through a ContextWriter -- see
+        # ParallelExecutor's and PostgresExtractionStage's docstrings
+        # for why that distinction matters under real concurrency).
+        pipeline = Pipeline(
+            id="marketplace-batch-pipeline-extract-postgres",
+            name="Postgres Extraction",
+            stages=(tuple(stage_by_entity[entity] for entity, _ in ENTITIES),),
+        )
+
+        context = ProcessingContext(
+            id="context-extract-postgres",
+            metadata=ExecutionMetadata(
+                execution_id="execution-extract-postgres",
+            ),
+        )
+
+        executor = ParallelExecutor()
+        executor.register_hooks(LoggingHook())
+        executor.register_hooks(TracingHook())
+        executor.register_hooks(metrics_hook)
+
+        result = asyncio.run(
+            executor.execute(pipeline, context)
+        )
+
+        results_by_entity = {
+            stage.entity: next(
+                (
+                    stage_result
+                    for stage_result in result.stage_results
+                    if stage_result.stage_id == stage.id
+                ),
+                None,
+            )
+            for stage in stage_by_entity.values()
+        }
+
+        failed_or_missing = {
+            entity: stage_result
+            for entity, stage_result in results_by_entity.items()
+            if stage_result is None or stage_result.failed
+        }
+
+        if failed_or_missing:
+            details = "; ".join(
+                f"{entity}: did not complete (pipeline-level failure)"
+                if stage_result is None
+                else f"{entity}: {stage_result.error_type} - "
+                f"{stage_result.error_message}"
+                for entity, stage_result in failed_or_missing.items()
+            )
+            raise RuntimeError(f"Extraction failed for: {details}")
+
+        counts: dict[str, int] = {}
+
+        for entity, stage_result in results_by_entity.items():
+            uri = stage_result.output["uri"]
+            landed_location = StorageLocation.from_uri(uri)
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                local_path = Path(tmp_dir) / "landed.parquet"
+                storage_provider.download(landed_location, local_path)
+                landed_count = pq.ParquetFile(local_path).metadata.num_rows
+
+            postgres_count = postgres_counts[entity]
+
+            if landed_count != postgres_count:
+                raise RuntimeError(
+                    f"Row count mismatch for '{entity}': Postgres has "
+                    f"{postgres_count}, landed parquet ({uri}) has "
+                    f"{landed_count}."
                 )
 
-                context = ProcessingContext(
-                    id=f"context-extract-{entity}",
-                    metadata=ExecutionMetadata(
-                        execution_id=f"execution-extract-{entity}",
-                    ),
-                )
+            counts[entity] = postgres_count
 
-                executor = SequentialExecutor()
-                executor.register_hooks(LoggingHook())
-                executor.register_hooks(TracingHook())
-                executor.register_hooks(metrics_hook)
-
-                result = asyncio.run(
-                    executor.execute(pipeline, context)
-                )
-
-                if result.status != ExecutionStatus.COMPLETED:
-                    stage_result = result.stage_results[0]
-                    raise RuntimeError(
-                        f"Extraction failed for '{entity}': "
-                        f"{stage_result.error_type} - "
-                        f"{stage_result.error_message}"
-                    )
-
-                uri = context.get(StorageKeys.URI)
-                landed_location = StorageLocation.from_uri(uri)
-
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    local_path = Path(tmp_dir) / "landed.parquet"
-                    storage_provider.download(landed_location, local_path)
-                    landed_count = pq.ParquetFile(local_path).metadata.num_rows
-
-                if landed_count != postgres_count:
-                    raise RuntimeError(
-                        f"Row count mismatch for '{entity}': Postgres has "
-                        f"{postgres_count}, landed parquet ({uri}) has "
-                        f"{landed_count}."
-                    )
-
-                counts[entity] = postgres_count
-
-                print(f"OK: '{entity}' -- {postgres_count} rows, verified.")
+            print(f"OK: '{entity}' -- {postgres_count} rows, verified.")
 
         metrics_hook.push(job="extract_postgres")
 

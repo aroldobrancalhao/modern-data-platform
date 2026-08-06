@@ -29,9 +29,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from data_platform.processing.core.context_keys.processing_keys import (
-    ProcessingKeys,
-)
 from data_platform.processing.core.execution_metadata import (
     ExecutionMetadata,
 )
@@ -52,6 +49,12 @@ from data_platform.processing.policies.failure_policy import FailurePolicy
 from data_platform.processing.policies.policy_manager import PolicyManager
 from data_platform.processing.policies.retry_policy import RetryPolicy
 from data_platform.processing.policies.timeout_policy import TimeoutPolicy
+from data_platform.processing.runtime.execution_runtime import (
+    current_attempt,
+    current_max_attempts,
+    current_stage_id,
+    current_stage_result,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -70,7 +73,7 @@ class SuccessfulStage(Stage):
             metadata=context.metadata,
             stage_id=self.id,
             stage_name=self.name,
-            attempt=context.get(ProcessingKeys.CURRENT_ATTEMPT, 1),
+            attempt=current_attempt(),
         )
 
 
@@ -85,7 +88,7 @@ class BusinessFailureStage(Stage):
             stage_name=self.name,
             error_type="ValidationError",
             error_message="Business rule violated.",
-            attempt=context.get(ProcessingKeys.CURRENT_ATTEMPT, 1),
+            attempt=current_attempt(),
         )
 
 
@@ -119,7 +122,7 @@ class FlakyStage(Stage):
             metadata=context.metadata,
             stage_id=self.id,
             stage_name=self.name,
-            attempt=context.get(ProcessingKeys.CURRENT_ATTEMPT, 1),
+            attempt=current_attempt(),
         )
 
 
@@ -369,7 +372,7 @@ class TestRetryPolicyIntegration:
                 context: ProcessingContext,
             ) -> StageResult:
                 observed_max_attempts.append(
-                    context.get(ProcessingKeys.MAX_ATTEMPTS)
+                    current_max_attempts()
                 )
                 return StageResult(
                     status=ExecutionStatus.COMPLETED,
@@ -414,7 +417,7 @@ class TestRetryPolicyIntegration:
                 self.calls += 1
 
                 observed_attempts.append(
-                    context.get(ProcessingKeys.CURRENT_ATTEMPT)
+                    current_attempt()
                 )
 
                 if self.calls <= self.fail_times:
@@ -470,8 +473,13 @@ class TestRetryPolicyIntegration:
             context,
         )
 
-        assert not context.contains(ProcessingKeys.CURRENT_ATTEMPT)
-        assert not context.contains(ProcessingKeys.CURRENT_STAGE)
+        # stage_finished() clears current_stage and current_attempt
+        # together (see execution_runtime.py) -- current_stage_id()
+        # being None is enough to prove that ran; current_attempt()
+        # has no equivalent "unset" state to assert on of its own
+        # (it falls back to 1, the same value a genuinely-in-flight
+        # first attempt would report).
+        assert current_stage_id() is None
 
     async def test_ignores_business_failures_leaves_them_to_failure_policy(
         self,
@@ -532,9 +540,7 @@ class TestRetryPolicyIntegration:
             ) -> StageResult:
 
                 observed.append(
-                    context.get(
-                        ProcessingKeys.STAGE_RESULT,
-                    )
+                    current_stage_result(),
                 )
 
                 self.calls += 1
@@ -666,9 +672,7 @@ class TestRetryPolicyIntegration:
             ) -> StageResult:
 
                 attempts.append(
-                    context.get(
-                        ProcessingKeys.CURRENT_ATTEMPT,
-                    )
+                    current_attempt(),
                 )
 
                 return StageResult(

@@ -49,9 +49,6 @@ from data_platform.processing.executor.sequential_executor import (
 from data_platform.processing.extraction.postgres_extraction_stage import (
     PostgresExtractionStage,
 )
-from data_platform.processing.core.context_keys.storage_keys import (
-    StorageKeys,
-)
 from data_platform.observability.logging_config import configure_logging
 from data_platform.processing.logging.logging_hook import LoggingHook
 from data_platform.processing.metrics.prometheus_metrics_hook import (
@@ -111,15 +108,15 @@ async def _extract_one(
 
     result = await executor.execute(pipeline, context)
 
+    stage_result = result.stage_results[0]
+
     if result.status != ExecutionStatus.COMPLETED:
-        stage_result = result.stage_results[0]
         raise SystemExit(
             f"Extraction failed for '{entity}': "
             f"{stage_result.error_type} - {stage_result.error_message}"
         )
 
-    uri = context.get(StorageKeys.URI)
-    print(f"OK: wrote {uri}")
+    print(f"OK: wrote {stage_result.output['uri']}")
 
 
 async def main() -> None:

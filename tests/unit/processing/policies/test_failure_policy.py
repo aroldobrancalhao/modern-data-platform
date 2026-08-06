@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from data_platform.processing.core.context_keys import (
-    ProcessingKeys,
-)
 from data_platform.processing.core.execution_metadata import (
     ExecutionMetadata,
 )
@@ -38,6 +35,9 @@ from data_platform.processing.policies.policy_context import (
 )
 from data_platform.processing.policies.policy_event import (
     PolicyEvent,
+)
+from data_platform.processing.runtime.execution_runtime import (
+    ExecutionRuntime,
 )
 
 pytestmark = pytest.mark.anyio
@@ -114,8 +114,7 @@ async def test_should_ignore_technical_exception() -> None:
 
     context = create_context()
 
-    context.set(
-        ProcessingKeys.EXCEPTION,
+    ExecutionRuntime(context).stage_failed(
         RuntimeError(),
     )
 
@@ -137,8 +136,7 @@ async def test_should_cancel_pipeline_when_business_failure() -> None:
 
     context = create_context()
 
-    context.set(
-        ProcessingKeys.STAGE_RESULT,
+    ExecutionRuntime(context).stage_result(
         StageResult(
             status=ExecutionStatus.FAILED,
             metadata=context.metadata,
@@ -170,8 +168,7 @@ async def test_should_continue_when_fail_fast_disabled() -> None:
 
     context = create_context()
 
-    context.set(
-        ProcessingKeys.STAGE_RESULT,
+    ExecutionRuntime(context).stage_result(
         StageResult(
             status=ExecutionStatus.FAILED,
             metadata=context.metadata,

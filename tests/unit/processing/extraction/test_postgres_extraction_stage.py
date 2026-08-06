@@ -25,17 +25,26 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
 
+from data_platform.processing.core.execution_metadata import (
+    ExecutionMetadata,
+)
+from data_platform.processing.core.processing_context import (
+    ProcessingContext,
+)
 from data_platform.processing.extraction.postgres_extraction_stage import (
     PostgresExtractionStage,
     _arrow_type_for_column,
 )
+from data_platform.providers.provider_factory import ProviderFactory
 
 from integrations.postgres.config import PostgresSettings
+
+pytestmark = pytest.mark.anyio
 
 
 @dataclass
@@ -161,3 +170,55 @@ def test_arrow_type_for_column_raises_on_numeric_without_precision() -> None:
 
     with pytest.raises(ValueError, match="without a precision/scale"):
         _arrow_type_for_column(column)  # type: ignore[arg-type]
+
+
+async def test_execute_returns_the_landed_location_on_output() -> None:
+    """
+    Regression coverage for the ParallelExecutor migration: execute()
+    used to publish the landed location into the shared
+    ProcessingContext via StorageContextWriter -- unsafe if this Stage
+    ever runs inside a parallel group (see ParallelExecutor's
+    docstring). It now returns it on StageResult.output instead,
+    which a coroutine's own return value can't collide on.
+    """
+
+    description = [_FakeColumn(name="customer_id", type_code=2950)]
+
+    fake_provider = MagicMock()
+
+    provider_factory = MagicMock(spec=ProviderFactory)
+    provider_factory.create.return_value = fake_provider
+
+    stage = PostgresExtractionStage(
+        id="extract-customers",
+        name="Extract Customers",
+        provider_name="aws.s3",
+        postgres_settings=PostgresSettings(),
+        table_name="marketplace.customers",
+        entity="customers",
+        provider_factory=provider_factory,
+    )
+
+    context = ProcessingContext(
+        id="context",
+        metadata=ExecutionMetadata(execution_id="execution"),
+    )
+
+    with patch(
+        "data_platform.processing.extraction.postgres_extraction_stage.psycopg.connect",
+        return_value=_FakeConnection(_FakeCursor(description, rows=[])),
+    ):
+        result = await stage.execute(context)
+
+    assert result.succeeded
+
+    fake_provider.upload.assert_called_once()
+
+    uploaded_location = fake_provider.upload.call_args[0][0]
+
+    assert result.output["uri"] == uploaded_location.uri
+    assert result.output["bucket"] == uploaded_location.bucket
+    assert result.output["object_key"] == uploaded_location.key
+    assert result.output["uri"].startswith("s3://")
+    assert "/raw/customers/" in result.output["uri"]
+    assert result.output["uri"].endswith(".parquet")

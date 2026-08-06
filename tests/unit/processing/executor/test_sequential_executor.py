@@ -25,9 +25,10 @@ from data_platform.processing.executor.sequential_executor import (
 )
 from data_platform.processing.runtime.execution_runtime import (
     ExecutionKeys,
-)
-from data_platform.processing.core.context_keys.processing_keys import (
-    ProcessingKeys,
+    current_max_attempts,
+    current_stage_exception,
+    current_stage_id,
+    current_stage_result,
 )
 from data_platform.processing.hooks.hook import Hook
 
@@ -692,9 +693,7 @@ async def test_execution_runtime_marks_execution_failed() -> None:
         ExecutionKeys.DURATION,
     )
 
-    exception = context.get(
-        ProcessingKeys.EXCEPTION,
-    )
+    exception = current_stage_exception()
 
     assert exception is not None
 
@@ -716,9 +715,7 @@ async def test_current_stage_is_cleared_after_execution() -> None:
         context,
     )
 
-    assert not context.contains(
-        ProcessingKeys.CURRENT_STAGE,
-    )
+    assert current_stage_id() is None
 
 
 # ============================================================================
@@ -742,12 +739,7 @@ async def test_runtime_stores_stage_result() -> None:
         context,
     )
 
-    assert (
-        context.get(
-            ProcessingKeys.STAGE_RESULT,
-        )
-        is result.last_result
-    )
+    assert current_stage_result() is result.last_result
 
 
 async def test_runtime_stores_max_attempts() -> None:
@@ -768,12 +760,7 @@ async def test_runtime_stores_max_attempts() -> None:
         context,
     )
 
-    assert (
-        context.get(
-            ProcessingKeys.MAX_ATTEMPTS,
-        )
-        == 7
-    )
+    assert current_max_attempts() == 7
 
 
 async def test_failure_policy_fail_fast_cancels_pipeline() -> None:
@@ -849,3 +836,38 @@ async def test_failure_policy_continue_execution() -> None:
 
     assert result.last_result is not None
     assert result.last_result.stage_id == "load"
+
+
+async def test_a_grouped_pipeline_still_runs_every_stage_one_at_a_time() -> (
+    None
+):
+    """
+    SequentialExecutor needed zero changes to support Pipeline's
+    StageGroup addition (see ParallelExecutor) -- iterating a Pipeline
+    directly always flattens groups transparently. A grouped Pipeline
+    run here should be indistinguishable from an equivalent ungrouped
+    one: every stage still runs, one at a time, in definition order.
+    """
+
+    executor = SequentialExecutor()
+
+    pipeline = Pipeline(
+        id="pipeline",
+        name="Pipeline",
+        stages=(
+            (
+                SuccessfulStage(id="a", name="A"),
+                SuccessfulStage(id="b", name="B"),
+            ),
+            SuccessfulStage(id="c", name="C"),
+        ),
+    )
+
+    result = await executor.execute(
+        pipeline,
+        create_context(),
+    )
+
+    assert result.status == ExecutionStatus.COMPLETED
+    assert result.total_stages == 3
+    assert [r.stage_id for r in result.stage_results] == ["a", "b", "c"]

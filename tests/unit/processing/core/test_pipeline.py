@@ -171,3 +171,103 @@ def test_pipeline_is_iterable() -> None:
         stage1,
         stage2,
     ]
+
+
+# ============================================================================
+# StageGroup / flattening -- see ParallelExecutor
+# ============================================================================
+
+
+def test_iterating_a_grouped_pipeline_flattens_it() -> None:
+    """
+    A nested tuple (a parallel group) yields its members in order when
+    the Pipeline is iterated directly -- this is what lets
+    SequentialExecutor run a grouped Pipeline correctly without any
+    changes of its own (it just sees a longer flat sequence).
+    """
+
+    before = create_stage("before")
+    group_a = create_stage("group-a")
+    group_b = create_stage("group-b")
+    after = create_stage("after")
+
+    pipeline = Pipeline(
+        id="pipeline",
+        name="Pipeline",
+        stages=(before, (group_a, group_b), after),
+    )
+
+    assert list(pipeline) == [before, group_a, group_b, after]
+
+
+def test_len_counts_individual_stages_not_top_level_elements() -> None:
+    pipeline = Pipeline(
+        id="pipeline",
+        name="Pipeline",
+        stages=(
+            create_stage("before"),
+            (create_stage("group-a"), create_stage("group-b")),
+        ),
+    )
+
+    assert len(pipeline) == 3
+    assert pipeline.stage_count == 3
+
+
+def test_groups_wraps_lone_stages_into_1_tuples() -> None:
+    lone = create_stage("lone")
+    group_a = create_stage("group-a")
+    group_b = create_stage("group-b")
+
+    pipeline = Pipeline(
+        id="pipeline",
+        name="Pipeline",
+        stages=(lone, (group_a, group_b)),
+    )
+
+    assert pipeline.groups == (
+        (lone,),
+        (group_a, group_b),
+    )
+
+
+def test_groups_on_an_ungrouped_pipeline_is_every_stage_alone() -> None:
+    stage1 = create_stage("one")
+    stage2 = create_stage("two")
+
+    pipeline = Pipeline(
+        id="pipeline",
+        name="Pipeline",
+        stages=(stage1, stage2),
+    )
+
+    assert pipeline.groups == ((stage1,), (stage2,))
+
+
+def test_pipeline_rejects_none_stage_inside_a_group() -> None:
+    with pytest.raises(
+        ValueError,
+        match="Pipeline cannot contain null stages.",
+    ):
+        Pipeline(
+            id="pipeline",
+            name="Pipeline",
+            stages=((create_stage("a"), None),),  # type: ignore[arg-type]
+        )
+
+
+def test_pipeline_rejects_duplicate_stage_ids_across_a_group_and_a_lone_stage() -> (
+    None
+):
+    with pytest.raises(
+        ValueError,
+        match="Duplicate stage id detected: 'extract'.",
+    ):
+        Pipeline(
+            id="pipeline",
+            name="Pipeline",
+            stages=(
+                (create_stage("extract"), create_stage("transform")),
+                create_stage("extract"),
+            ),
+        )

@@ -10,7 +10,10 @@ License: MIT
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
+
+import pytest
 
 from data_platform.processing.core.context_keys.execution_keys import (
     ExecutionKeys,
@@ -29,7 +32,14 @@ from data_platform.processing.core.processing_context import (
 )
 from data_platform.processing.runtime.execution_runtime import (
     ExecutionRuntime,
+    current_attempt,
+    current_max_attempts,
+    current_stage_exception,
+    current_stage_id,
+    current_stage_result,
 )
+
+pytestmark = pytest.mark.anyio
 
 
 def create_context() -> ProcessingContext:
@@ -117,16 +127,13 @@ def test_execution_started_clears_previous_exception() -> None:
 
     runtime, context = create_runtime()
 
-    context.set(
-        ProcessingKeys.EXCEPTION,
+    runtime.stage_failed(
         RuntimeError("old"),
     )
 
     runtime.execution_started()
 
-    assert not context.contains(
-        ProcessingKeys.EXCEPTION,
-    )
+    assert current_stage_exception() is None
 
 
 def test_execution_completed_sets_completed_status() -> None:
@@ -239,10 +246,7 @@ def test_execution_failed_stores_exception() -> None:
     runtime.execution_started()
     runtime.execution_failed(exception)
 
-    assert (
-        context.get(ProcessingKeys.EXCEPTION)
-        is exception
-    )
+    assert current_stage_exception() is exception
 
 
 def test_stage_started_sets_current_stage() -> None:
@@ -254,12 +258,7 @@ def test_stage_started_sets_current_stage() -> None:
 
     runtime.stage_started("customers")
 
-    assert (
-        context.get(
-            ProcessingKeys.CURRENT_STAGE,
-        )
-        == "customers"
-    )
+    assert current_stage_id() == "customers"
 
 
 def test_stage_finished_clears_current_stage() -> None:
@@ -272,25 +271,20 @@ def test_stage_finished_clears_current_stage() -> None:
     runtime.stage_started("customers")
     runtime.stage_finished()
 
-    assert not context.contains(
-        ProcessingKeys.CURRENT_STAGE,
-    )
+    assert current_stage_id() is None
 
 
 def test_execution_started_clears_previous_stage_result() -> None:
 
     runtime, context = create_runtime()
 
-    context.set(
-        ProcessingKeys.STAGE_RESULT,
+    runtime.stage_result(
         object(),
     )
 
     runtime.execution_started()
 
-    assert not context.contains(
-        ProcessingKeys.STAGE_RESULT,
-    )
+    assert current_stage_result() is None
 
 
 def test_execution_started_clears_previous_pipeline_result() -> None:
@@ -348,44 +342,33 @@ def test_retry_started_updates_attempt() -> None:
 
     runtime.retry_started(2)
 
-    assert (
-        context.get(
-            ProcessingKeys.CURRENT_ATTEMPT,
-        )
-        == 2
-    )
+    assert current_attempt() == 2
 
 
 def test_retry_started_clears_previous_exception() -> None:
 
     runtime, context = create_runtime()
 
-    context.set(
-        ProcessingKeys.EXCEPTION,
+    runtime.stage_failed(
         RuntimeError(),
     )
 
     runtime.retry_started(2)
 
-    assert not context.contains(
-        ProcessingKeys.EXCEPTION,
-    )
+    assert current_stage_exception() is None
 
 
 def test_retry_started_clears_stage_result() -> None:
 
     runtime, context = create_runtime()
 
-    context.set(
-        ProcessingKeys.STAGE_RESULT,
+    runtime.stage_result(
         object(),
     )
 
     runtime.retry_started(2)
 
-    assert not context.contains(
-        ProcessingKeys.STAGE_RESULT,
-    )
+    assert current_stage_result() is None
 
 
 def test_max_attempts_sets_value() -> None:
@@ -394,12 +377,7 @@ def test_max_attempts_sets_value() -> None:
 
     runtime.max_attempts(5)
 
-    assert (
-        context.get(
-            ProcessingKeys.MAX_ATTEMPTS,
-        )
-        == 5
-    )
+    assert current_max_attempts() == 5
 
 
 def test_stage_result_is_stored() -> None:
@@ -410,12 +388,7 @@ def test_stage_result_is_stored() -> None:
 
     runtime.stage_result(result)
 
-    assert (
-        context.get(
-            ProcessingKeys.STAGE_RESULT,
-        )
-        is result
-    )
+    assert current_stage_result() is result
 
 
 def test_pipeline_result_is_stored() -> None:
@@ -442,9 +415,55 @@ def test_stage_failed_stores_exception() -> None:
 
     runtime.stage_failed(exception)
 
-    assert (
-        context.get(
-            ProcessingKeys.EXCEPTION,
-        )
-        is exception
+    assert current_stage_exception() is exception
+
+
+async def test_stage_scoped_state_is_isolated_across_concurrent_tasks() -> (
+    None
+):
+    """
+    Two "stages" running concurrently as separate asyncio.Tasks --
+    exactly how ParallelExecutor runs a group -- must never see each
+    other's stage-scoped runtime state, even though both calls go
+    through the same ExecutionRuntime instance. This is the actual
+    property the ContextVar-based redesign exists for (see
+    execution_runtime.py's module docstring) -- proven here directly,
+    independent of ParallelExecutor's own tests.
+    """
+
+    runtime, _ = create_runtime()
+
+    both_started = asyncio.Event()
+
+    arrived = 0
+
+    async def run_stage(stage_id: str, result: object) -> tuple[str, object]:
+        nonlocal arrived
+
+        runtime.stage_started(stage_id)
+
+        runtime.stage_result(result)
+
+        arrived += 1
+
+        if arrived == 2:
+            both_started.set()
+
+        # Deterministic rendezvous, not a sleep: both tasks must have
+        # already set their own state above before either is allowed
+        # to read it back below -- if the two Tasks were secretly
+        # sharing state instead of isolated, this doesn't change the
+        # outcome, but it does guarantee the race window is actually
+        # exercised on every run instead of depending on scheduler
+        # luck.
+        await both_started.wait()
+
+        return current_stage_id(), current_stage_result()
+
+    outcome_a, outcome_b = await asyncio.gather(
+        run_stage("stage-a", "result-a"),
+        run_stage("stage-b", "result-b"),
     )
+
+    assert outcome_a == ("stage-a", "result-a")
+    assert outcome_b == ("stage-b", "result-b")

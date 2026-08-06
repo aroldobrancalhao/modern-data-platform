@@ -10,9 +10,6 @@ License: MIT
 
 from __future__ import annotations
 
-from data_platform.processing.core.context_keys.processing_keys import (
-    ProcessingKeys,
-)
 from data_platform.processing.core.execution_metadata import (
     ExecutionMetadata,
 )
@@ -33,6 +30,9 @@ from data_platform.processing.policies.policy_event import (
 )
 from data_platform.processing.policies.retry_policy import (
     RetryPolicy,
+)
+from data_platform.processing.runtime.execution_runtime import (
+    ExecutionRuntime,
 )
 
 import pytest
@@ -88,18 +88,13 @@ def create_policy_context(
 async def test_retry_allowed() -> None:
     context = create_context()
 
-    context.set(
-        ProcessingKeys.CURRENT_ATTEMPT,
-        1,
-    )
+    runtime = ExecutionRuntime(context)
 
-    context.set(
-        ProcessingKeys.MAX_ATTEMPTS,
-        3,
-    )
+    runtime.max_attempts(3)
 
-    context.set(
-        ProcessingKeys.EXCEPTION,
+    runtime.retry_started(1)
+
+    runtime.stage_failed(
         RuntimeError("boom"),
     )
 
@@ -121,18 +116,13 @@ async def test_retry_allowed() -> None:
 async def test_retry_not_allowed_when_attempts_are_exhausted() -> None:
     context = create_context()
 
-    context.set(
-        ProcessingKeys.CURRENT_ATTEMPT,
-        3,
-    )
+    runtime = ExecutionRuntime(context)
 
-    context.set(
-        ProcessingKeys.MAX_ATTEMPTS,
-        3,
-    )
+    runtime.max_attempts(3)
 
-    context.set(
-        ProcessingKeys.EXCEPTION,
+    runtime.retry_started(3)
+
+    runtime.stage_failed(
         RuntimeError("boom"),
     )
 
@@ -154,15 +144,11 @@ async def test_retry_not_allowed_when_attempts_are_exhausted() -> None:
 async def test_retry_is_ignored_without_exception() -> None:
     context = create_context()
 
-    context.set(
-        ProcessingKeys.CURRENT_ATTEMPT,
-        1,
-    )
+    runtime = ExecutionRuntime(context)
 
-    context.set(
-        ProcessingKeys.MAX_ATTEMPTS,
-        3,
-    )
+    runtime.max_attempts(3)
+
+    runtime.retry_started(1)
 
     policy = RetryPolicy()
 
@@ -182,18 +168,13 @@ async def test_retry_is_ignored_without_exception() -> None:
 async def test_retry_is_ignored_for_other_events() -> None:
     context = create_context()
 
-    context.set(
-        ProcessingKeys.CURRENT_ATTEMPT,
-        1,
-    )
+    runtime = ExecutionRuntime(context)
 
-    context.set(
-        ProcessingKeys.MAX_ATTEMPTS,
-        3,
-    )
+    runtime.max_attempts(3)
 
-    context.set(
-        ProcessingKeys.EXCEPTION,
+    runtime.retry_started(1)
+
+    runtime.stage_failed(
         RuntimeError("boom"),
     )
 

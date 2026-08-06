@@ -10,6 +10,7 @@ License: MIT
 
 from __future__ import annotations
 
+import asyncio
 import io
 import uuid
 from dataclasses import dataclass
@@ -20,9 +21,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from psycopg import Column, sql
 
-from data_platform.processing.context_writers.storage_context_writer import (
-    StorageContextWriter,
-)
 from data_platform.processing.core.execution_status import ExecutionStatus
 from data_platform.processing.core.processing_context import (
     ProcessingContext,
@@ -135,9 +133,35 @@ class PostgresExtractionStage(Stage):
         self,
         context: ProcessingContext,
     ) -> StageResult:
+        """
+        The real work (psycopg + boto3, both synchronous/blocking
+        clients) runs via asyncio.to_thread() -- not inline. Without
+        that, this coroutine has no actual await point of its own, so
+        asyncio.gather() (ParallelExecutor) cannot interleave it with
+        a sibling stage at all: the whole extract-then-upload sequence
+        would run as one uninterruptible block on the event loop
+        thread, one stage fully blocking the next. Confirmed live:
+        running the real 7-entity extract_postgres migration this way
+        took 71s, *slower* than the 45s pre-parallelization sequential
+        baseline -- the "Found credentials" log line each stage's
+        first S3 call emits landed 6-16s apart, back to back, proving
+        the stages were never actually overlapping despite
+        ParallelExecutor's own machinery being correct (see its own
+        tests, which use genuinely async primitives and do prove real
+        concurrency). See "Item 2 (parallelize flushes)" and the
+        ParallelExecutor entries in docs/architecture/roadmap-next-steps.md.
+        """
+
+        provider = cast(
+            StorageProvider,
+            self.resolve_provider(self.provider_name),
+        )
 
         try:
-            table = self._extract()
+            location = await asyncio.to_thread(
+                self._extract_and_upload,
+                provider,
+            )
 
         except psycopg.errors.UndefinedTable as error:
             return StageResult(
@@ -149,10 +173,31 @@ class PostgresExtractionStage(Stage):
                 error_message=str(error),
             )
 
-        provider = cast(
-            StorageProvider,
-            self.resolve_provider(self.provider_name),
+        return StageResult(
+            status=ExecutionStatus.COMPLETED,
+            metadata=context.metadata,
+            stage_id=self.id,
+            stage_name=self.name,
+            output={
+                "uri": location.uri,
+                "bucket": location.bucket,
+                "object_key": location.key,
+            },
         )
+
+    def _extract_and_upload(
+        self,
+        provider: StorageProvider,
+    ) -> StorageLocation:
+        """
+        The synchronous critical section execute() hands to a worker
+        thread as a single unit -- see execute()'s own docstring for
+        why this isn't just inlined with individual awaits instead
+        (there is nothing genuinely async to await; psycopg and boto3
+        are both synchronous clients here).
+        """
+
+        table = self._extract()
 
         location = StorageLocation.from_uri(
             f"{StorageConfig.raw(self.entity)}/{uuid.uuid4()}.parquet"
@@ -163,17 +208,7 @@ class PostgresExtractionStage(Stage):
             self._to_parquet(table),
         )
 
-        StorageContextWriter.write(
-            location,
-            context,
-        )
-
-        return StageResult(
-            status=ExecutionStatus.COMPLETED,
-            metadata=context.metadata,
-            stage_id=self.id,
-            stage_name=self.name,
-        )
+        return location
 
     def _extract(self) -> pa.Table:
         """

@@ -12,6 +12,7 @@ from data_platform.processing.core.processing_context import (
 from data_platform.processing.core.stage import Stage
 from data_platform.processing.core.stage_result import StageResult
 from data_platform.processing.policies.policy_event import PolicyEvent
+from data_platform.processing.runtime import execution_runtime
 
 
 @dataclass(slots=True)
@@ -19,9 +20,13 @@ class PolicyContext:
     """
     Read-only view exposed to execution policies.
 
-    The execution state remains owned by ProcessingContext.
-    This class provides a typed projection of the information
-    required by policies.
+    ``cancelled`` (pipeline-level -- there is only ever one per
+    execute() call) still reads from ProcessingContext. The rest --
+    exception/stage_result/current_attempt/max_attempts -- are
+    stage-level: they read from execution_runtime's ContextVars, not
+    ProcessingContext, so a policy evaluated for one stage's failure
+    can't observe a concurrently-running sibling's data (see
+    execution_runtime.py's module docstring comment).
     """
 
     processing_context: ProcessingContext
@@ -34,29 +39,19 @@ class PolicyContext:
 
     @property
     def exception(self) -> Exception | None:
-        return self.processing_context.get(
-            ProcessingKeys.EXCEPTION,
-        )
+        return execution_runtime.current_stage_exception()
 
     @property
     def stage_result(self) -> StageResult | None:
-        return self.processing_context.get(
-            ProcessingKeys.STAGE_RESULT,
-        )
+        return execution_runtime.current_stage_result()
 
     @property
     def current_attempt(self) -> int:
-        return self.processing_context.get(
-            ProcessingKeys.CURRENT_ATTEMPT,
-            1,
-        )
+        return execution_runtime.current_attempt()
 
     @property
     def max_attempts(self) -> int:
-        return self.processing_context.get(
-            ProcessingKeys.MAX_ATTEMPTS,
-            1,
-        )
+        return execution_runtime.current_max_attempts()
 
     @property
     def cancelled(self) -> bool:

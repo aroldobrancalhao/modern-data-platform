@@ -31,9 +31,6 @@ from data_platform.config.settings import Settings
 from data_platform.processing.core.context_keys.processing_keys import (
     ProcessingKeys,
 )
-from data_platform.processing.core.context_keys.storage_keys import (
-    StorageKeys,
-)
 from data_platform.processing.core.execution_metadata import (
     ExecutionMetadata,
 )
@@ -117,7 +114,7 @@ async def test_postgres_extraction_stage_lands_raw_parquet_in_s3(
 
         assert result.status == ExecutionStatus.COMPLETED
 
-        uploaded_uri = context.get(StorageKeys.URI)
+        uploaded_uri = result.stage_results[0].output["uri"]
         assert uploaded_uri is not None
         assert uploaded_uri.startswith(f"{StorageConfig.raw(ENTITY)}/")
         assert uploaded_uri.endswith(".parquet")
