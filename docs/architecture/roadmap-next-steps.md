@@ -257,6 +257,189 @@ added (`mdp_bronze_consumer_lag`) is what makes this bottleneck visible
 in Prometheus/Grafana going forward, which is the actual point; fixing
 the bottleneck itself is separate follow-up work.
 
+## Batch-poll (max_messages=25) validated: ~3x throughput, but its round-duration number isn't 1:1 comparable to the earlier 4.76s baseline
+
+Follow-up to the entry above -- this is that entry's "batch-poll each
+topic" half of the proposed fix, implemented and validated once the
+memory-limit fixes (bronze-consumer 1024M -> 1536M, plus right-sizing
+kafka and debezium-connect) let the container run OOM-free long enough
+to observe a stable regime instead of restart noise.
+
+**Methodology note -- the 4.76s baseline is not directly comparable to
+the current round-duration mean.** Before this change, `consume()`
+fetched exactly one message per topic per round (see the entry above),
+so the 100-record buffer took ~100 rounds to fill and trigger a flush
+-- a "flush round" (inline `write_deltalake()` calls before moving to
+the next entity) was roughly 1 in 100 rounds, so almost any round
+sampled at random would be a fast, flush-free one. With
+`max_messages=25`, the same buffer now fills in ~4 rounds, so roughly
+1 in 4 rounds includes a flush. The 4.76s baseline was most likely
+(~99% probability under the old regime) a flush-free round; the
+current mean -- ~21-22s, converging across 3/5/10/15-minute windows
+via Prometheus `increase()` on `mdp_bronze_round_duration_seconds`,
+confirmed stable (not restart transient) by checking the same query at
+different offsets over a 56-minute window -- necessarily includes the
+heavier flush rounds about a quarter of the time. Comparing the two
+raw numbers as-is would understate the real improvement: they are not
+measuring the same unit of work. Separately, it was never confirmed
+whether the original 4.76s was itself a single stopwatch sample or an
+average of several rounds -- not recorded at the time, so that
+uncertainty stacks on top of the regime difference.
+
+**What actually matters is throughput, not round time.** `products`
+(the same topic the entry above measured at ~20 msg/min) is now at
+**~61 msg/min** -- about 3x. All 14 currently-active topics sit in the
+same 61-63 msg/min range, ~861 msg/min aggregate. The backlog
+(58K-271K messages/topic) has not drained yet -- this is still
+catch-up regime, not empty steady-state, so these numbers describe
+sustained-under-backlog throughput, which is the case that matters.
+
+**Where the bottleneck moved:** this change didn't remove the
+round-robin's inline, serial `write_deltalake()` calls (the root cause
+the entry above already named) -- it just shortened the period between
+flushes. Roughly 1 in 4 rounds now serializes 14-16 inline S3 writes
+(one per entity whose buffer crossed 100 records that round) back to
+back before the loop moves on. That's a real number to size the next
+fix from: **item 2 (parallelize flushes, e.g. via `ThreadPoolExecutor`)
+should assume up to 14-16 simultaneous in-flight writes**, not the 2-3
+originally assumed back when buffers filled far more slowly.
+
+## Bronze Consumer's ~1.5GB memory plateau was librdkafka's prefetch buffer, not a leak or Arrow/deltalake overhead
+
+Follow-up to the entry above: before sizing item 2's thread pool from
+real headroom, the ~1.5GB plateau (RSS steady at 94-98% of the
+container's 1536M limit even with batch-poll's flushes running
+sequentially, no concurrency yet) needed an actual root cause, not an
+assumption. Two hypotheses were ruled out with live data before the
+real one was found:
+
+- **Not a leak.** `tracemalloc.start()` plus periodic snapshots
+  showed Python-tracked memory at 0.4-1.8MB against an RSS of
+  ~1520-1547MB (0.0-0.1% of RSS) over a 9.5-minute window, with the
+  tracked peak flat at 2.0MB for the back half of that window. No
+  in-code leak.
+- **Not Arrow/`deltalake` write overhead.** Once measured cleanly
+  (i.e. after the real cause below was already fixed, so this
+  wasn't confounded with it -- see that section's own caveat),
+  per-flush RSS deltas were mostly under 6MB, 26.5MB at the observed
+  max, across 40 samples spanning every active entity. Nowhere near
+  1.5GB.
+
+**Root cause, confirmed via a `stats_cb` registered on
+`statistics.interval.ms` (already configured, but previously going
+nowhere without a callback):** librdkafka's `queued.max.messages.kbytes`
+(prefetched-message buffer per Consumer) defaults to 65536 KB (64MiB)
+-- but that limit applies **per partition**, not per Consumer, and
+`kafka-topics --describe` confirmed every marketplace topic has 3
+partitions. The Bronze Consumer holds 16 independent Consumer
+instances (one per entity, see
+`KafkaMessagingProvider._resolve_consumer`), each subscribed to a
+topic with a deep backlog (58K-271K messages) -- so each Consumer's
+real ceiling was 3 x 64MiB = 192MB, not 64MB, and summing just 12 of
+the 16 consumers' live `fetchq_size` already exceeded the entire
+container's observed RSS. Worst-case theoretical ceiling across 14
+active topics: 14 x 192MB = ~2.69GB -- comfortably enough to explain
+an OOM under a less favorable backlog distribution than what was
+actually observed.
+
+**Fix applied:** `queued.max.messages.kbytes` set explicitly to 16384
+(16MiB/partition x 3 partitions = 48MB/consumer, x 16 consumers = 768MB
+worst case) in `KafkaContext.create_consumer()`. Chosen with margin: a
+single 16MiB partition queue still holds ~3600 messages at the ~4.6KB/
+message observed here, three orders of magnitude more than the 25
+messages/topic/round the round-robin loop actually drains per pass, so
+this was not expected to throttle consume_batch() -- confirmed live,
+see below.
+
+**Measured before/after, same live environment:**
+
+| | Before (64MiB/partition default) | After (16MiB/partition) |
+|---|---|---|
+| RSS (steady) | ~1.50-1.56GB (94-98% of 1536M) | **754.5-764.9MB (~49-50%)** |
+| Throughput/topic (`products`) | ~61 msg/min | **~107-118 msg/min** |
+| Throughput aggregate (14 topics) | ~861 msg/min | **~1524.5 msg/min** |
+
+Throughput did not just hold steady -- it **improved ~1.8x**. Likely
+explanation: running at 94-98% of a cgroup memory limit was probably
+already costing real performance (GC/allocator pressure close to the
+ceiling) before ever risking an actual OOM kill -- relieving that
+pressure seems to have helped more than the buffer-size reduction
+alone would predict. Not confirmed via a separate isolated experiment
+(e.g. holding the old buffer size but pinning more memory instead) --
+noted as the likely explanation, not a proven one.
+
+This is the real headroom item 2 (parallelize flushes) was waiting on
+-- see that entry for the pool size derived from it.
+
+## Item 2 (parallelize flushes) implemented: `ThreadPoolExecutor`, pool size 8, validated live
+
+Closes out the 3-item throughput plan the two entries above are also
+part of. `_flush()` (`write_deltalake()` + `commit()`) now runs on a
+`_FLUSH_POOL_SIZE`-worker thread pool instead of inline in the
+round-robin loop, so one entity's slow S3 write no longer blocks every
+other entity's turn behind it. Concurrency is capped at one flush in
+flight *per entity* (a `dict[str, Future]` in `run_bronze_consumer()`)
+regardless of pool size -- both to satisfy that constraint directly
+and because it's what makes the concurrency safe: an entity's
+`_EntityBuffer` is only ever mutated by the main thread while that
+entity has no flush in flight, and only ever read by the one worker
+thread flushing it, so the two never touch it at the same time.
+
+**Pool size (8), derived from real headroom, not a formula guess:**
+idle-of-flush baseline RSS ~750MB (the previous entry's fixed
+Kafka-buffer plateau), a conservative 40MB-per-concurrent-flush budget
+(safety margin over the 26.5MB max observed in 40 clean post-Kafka-fix
+samples), and a target ceiling of 1200MB even at full pool utilization
+(~336MB/22% slack left under the container's 1536M limit) work out to
+(1200-750)/40 = 11.25 concurrent flushes -- rounded down to 8.
+
+**Validated live, same environment, sequential vs. parallel:**
+
+| | Sequential (post-Kafka-fix) | Parallel (pool=8) |
+|---|---|---|
+| RSS (steady) | 754.5-764.9MB (~49-50%) | **866.2MB (56.4%)**, 670MB slack left |
+| Mean round duration | ~21-22s | **~7.9-8.6s** (-2.6x) |
+| Throughput/topic (`products`) | ~107-118 msg/min | **~156.2 msg/min** (+~35%) |
+| Throughput aggregate | ~1524.5 msg/min | **~2203.3 msg/min** (+~44%) |
+
+No restarts, no OOM, memory grew by the predicted amount (well inside
+budget) while throughput improved further on top of the Kafka-buffer
+fix's own gain. Pool size 8 needed no adjustment from this result --
+there's still real headroom (670MB) if a future workload change
+justifies revisiting it, but nothing here calls for that now.
+
+**A real correctness bug found and fixed along the way, worth keeping
+here since it will bite again if a future change removes the fix
+without understanding why it's there:** the round-robin loop's retry
+path for a still-in-flight entity used to be a bare `continue` --
+correct in isolation but relying on an unstated assumption that the
+main thread would incidentally yield the GIL often enough for the
+worker thread executing that entity's flush to actually get scheduled
+before the loop ran out of iterations. That assumption silently held
+during development only because a since-removed temporary diagnostic
+(a `tracemalloc` snapshot every 5 rounds) was slow enough to force
+regular yields as a side effect -- once removed, a single-entity,
+no-real-network-I/O scenario (exactly what
+`test_batch_write_failure_leaves_offsets_uncommitted_and_retries` and
+`test_batch_commit_failure_does_not_crash_and_retries_next_cycle` are)
+could spin through its *entire* `max_iterations` budget faster than
+the OS ever scheduled the worker thread -- confirmed reproducing
+100% of the time once the loop was fast and clean, independent of how
+many extra iterations of margin the test was given (tried up to
+200). Fixed with an explicit `time.sleep(0)` in the busy-continue
+branch, which forces a real yield instead of hoping one happens.
+Production's many entities and real `consume_batch()` network calls
+make this far less likely to matter there than in a tight single-
+entity test loop, but "far less likely" is not "impossible" -- the
+explicit yield is now unconditional, not incidental.
+
+**Combined effect of the full 3-item plan, start to finish**
+(`products` topic): ~20 msg/min (original baseline) -> ~61 msg/min
+(item 3, batch-poll) -> ~107-118 msg/min (Kafka prefetch-buffer fix)
+-> **~156.2 msg/min (item 2, parallel flush)** -- roughly **8x** the
+original throughput, with RSS ending lower (866MB) than where item 3
+alone had left it (~1.5GB), not higher.
+
 ## Host RAM stays under real pressure with the full local stack running
 
 `free -h`, checked live while validating Decision 4 with all 16

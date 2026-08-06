@@ -269,6 +269,14 @@ services:
 
       KAFKA_NUM_PARTITIONS: 3
 
+      # Default (unset) resolves to -Xmx1G -Xms1G, confirmed via the
+      # running process's actual java args. That, plus off-heap/page
+      # cache, was the container's whole footprint with no memory
+      # limit to contain it (~980MiB observed). This single-node dev
+      # broker doesn't need 1G of heap; reduced to make room for the
+      # container-level limit below without hitting GC pressure.
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+
     volumes:
 
       - kafka_data:/var/lib/kafka/data
@@ -286,6 +294,18 @@ services:
       timeout: 10s
 
       retries: 10
+
+    deploy:
+      resources:
+        limits:
+          # First container-level ceiling this service has ever had
+          # (previously unbounded, competing for host RAM with no
+          # predictability). 768M gives headroom over the 512M heap
+          # for JVM overhead (metaspace, thread stacks, off-heap
+          # buffers) and OS page cache for log segments -- not sized
+          # from a formula, will be revisited if it OOMs under real
+          # backlog load.
+          memory: 768M
 
     networks:
 
@@ -373,6 +393,26 @@ services:
 
       CONNECT_PLUGIN_PATH: /kafka/connect,/kafka/connect/debezium-plugins
 
+      # Default (unset) resolves to -Xms256M -Xmx2G, confirmed via the
+      # running process's actual java args -- way oversized for a
+      # single connector against one small Postgres DB (actual RSS
+      # observed at 691MiB, well under that 2G ceiling). 768M chosen
+      # over the plan's original 512M example: real RSS was already
+      # ~691MiB under the old 2G heap, and most of that isn't live
+      # heap (JVM/connector overhead) -- 512m risked just moving the
+      # OOM here instead of fixing it. Ms kept at 256m (unchanged).
+      #
+      # NOTE the var name: this image's docker-entrypoint.sh only
+      # reads plain HEAP_OPTS for the JVM flags (translating it to
+      # KAFKA_HEAP_OPTS internally before launching connect-distributed.sh)
+      # -- CONNECT_HEAP_OPTS was tried first by analogy with the other
+      # CONNECT_* vars below, but those all map to connect.properties
+      # keys (CONNECT_KEY_CONVERTER -> key.converter etc.), a
+      # different mechanism; it was silently ignored (heap unchanged
+      # at 2G). Confirmed by exec'ing into the container and checking
+      # the running java process's actual -Xmx/-Xms args.
+      HEAP_OPTS: "-Xms256m -Xmx768m"
+
     healthcheck:
 
       test:
@@ -393,6 +433,15 @@ services:
     volumes:
 
       - ./debezium/connectors:/connectors:ro
+
+    deploy:
+      resources:
+        limits:
+          # First container-level ceiling this service has ever had.
+          # 1024M gives headroom over the 768M heap for JVM overhead
+          # and connector-side buffers -- revisit if it OOMs under
+          # real CDC load.
+          memory: 1024M
 
     networks:
 
@@ -823,9 +872,18 @@ services:
           # only uses Kafka, but still loads boto3, databricks-sdk
           # and the rest of that graph. Not something to fix here
           # (pre-existing, shared by every entry point) -- 1024M
-          # gives real headroom over the ~512MB+ observed peak
-          # instead of a number picked from idle-footprint guesses.
-          memory: 1024M
+          # gave real headroom over the ~512MB+ observed peak instead
+          # of a number picked from idle-footprint guesses.
+          #
+          # Raised again to 1536M: with _MAX_POLL_BATCH_SIZE=25
+          # (consume_batch() polling up to 25 messages per topic per
+          # iteration instead of 1), RSS was observed at ~984MiB/1024M
+          # (96%) under backlog catch-up, plus 19 process restarts
+          # during that window consistent with silent OOM kills.
+          # Applied together with giving Kafka/Debezium their own
+          # container limits (previously unbounded, competing for the
+          # same host RAM) -- see roadmap-next-steps.md.
+          memory: 1536M
     networks:
       - mdp-network
 

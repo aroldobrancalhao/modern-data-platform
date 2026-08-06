@@ -22,6 +22,7 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from confluent_kafka import KafkaError, KafkaException
 from deltalake import DeltaTable
 
 from data_platform.messaging.messaging_provider import MessagingProvider
@@ -93,6 +94,23 @@ class FakeMessagingProvider(MessagingProvider):
             return None
 
         return Message(topic=topic, key=None, value=queue.pop(0))
+
+    def consume_batch(
+        self,
+        topic: str,
+        group_id: str,
+        max_messages: int,
+        timeout_seconds: float = 1.0,
+        auto_commit: bool = True,
+    ) -> list[Message]:
+        queue = self.queues.get((topic, group_id))
+
+        if not queue:
+            return []
+
+        batch, queue[:] = queue[:max_messages], queue[max_messages:]
+
+        return [Message(topic=topic, key=None, value=value) for value in batch]
 
     def commit(self, topic: str, group_id: str) -> None:
         key = (topic, group_id)
@@ -315,18 +333,92 @@ def test_batch_write_failure_leaves_offsets_uncommitted_and_retries(
 
     # Iteration batch_size - 1 (0-indexed) is where the buffer first
     # reaches the size threshold and the first (failing) flush is
-    # attempted; the buffer stays intact on failure, so it is still
-    # due on every iteration after that until a flush finally
-    # succeeds -- one extra iteration is enough for that retry, all
-    # within the same run_bronze_consumer call (its buffering state
-    # does not survive across separate calls, see _FakeClock).
+    # submitted to the thread pool; the buffer stays intact on
+    # failure, so it is still due on every iteration after that until
+    # a flush finally succeeds. Unlike before flushes ran on a thread
+    # pool, "one extra iteration" is not enough margin here: the retry
+    # is only *submitted* once the main loop observes the first
+    # attempt's Future as done(), and that observation can only happen
+    # on iterations still inside this call's max_iterations budget --
+    # ThreadPoolExecutor's own __exit__ (shutdown(wait=True)) guarantees
+    # every *submitted* flush finishes before run_bronze_consumer()
+    # returns, but not that a retry gets submitted at all if the loop
+    # runs out of iterations before the worker thread is even
+    # scheduled. Confirmed live: with only "+1" margin, this flaked
+    # under real CPU contention (running alongside tests/integration/'s
+    # heavier fixtures) even though it passed reliably in isolation.
+    # A large margin costs nothing here -- each iteration where the
+    # entity is still busy is just one cheap dict lookup + continue.
     run_bronze_consumer(
         provider,
         entities=("orders",),
-        max_iterations=bronze_consumer._MAX_BATCH_SIZE + 1,
+        max_iterations=bronze_consumer._MAX_BATCH_SIZE + 200,
     )
 
     table = DeltaTable(str(tmp_path / "orders")).to_pyarrow_table()
     assert table.num_rows == bronze_consumer._MAX_BATCH_SIZE
+    assert calls["count"] == 2
+    assert provider.commits[(topic, bronze_consumer._CONSUMER_GROUP_ID)] == 1
+
+
+def test_batch_commit_failure_does_not_crash_and_retries_next_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Reproduces the live incident that motivated this test: all 16
+    consumer threads lost their partition assignment (transient Kafka
+    DNS/network failure), and the resulting KafkaException out of
+    provider.commit() -- previously uncaught -- killed the whole
+    process. write_deltalake() itself is not flaky here; only commit()
+    is, so a real write lands on the first (failing-to-commit)
+    attempt, and the retry appends a second, duplicate copy of the
+    same records -- the accepted cost of retrying a commit-only
+    failure without clearing the buffer (see _flush()).
+    """
+    provider = FakeMessagingProvider()
+    topic = topic_for("orders")
+
+    for index in range(bronze_consumer._MAX_BATCH_SIZE):
+        provider.enqueue(
+            topic,
+            bronze_consumer._CONSUMER_GROUP_ID,
+            _envelope(
+                "orders", "c", {"id": f"order-{index}", "amount": 1.0}
+            ),
+        )
+
+    real_commit = provider.commit
+
+    calls = {"count": 0}
+
+    def flaky_commit(topic: str, group_id: str) -> None:
+        calls["count"] += 1
+
+        if calls["count"] == 1:
+            raise KafkaException(
+                KafkaError(
+                    KafkaError._ASSIGNMENT_LOST,
+                    "simulated lost assignment",
+                )
+            )
+
+        real_commit(topic, group_id)
+
+    monkeypatch.setattr(provider, "commit", flaky_commit)
+
+    # Same margin reasoning as
+    # test_batch_write_failure_leaves_offsets_uncommitted_and_retries:
+    # the retry is only submitted once the main loop observes the
+    # first attempt's Future as done(), which needs real iterations
+    # inside the budget, not just "+1" -- see that test's comment.
+    run_bronze_consumer(
+        provider,
+        entities=("orders",),
+        max_iterations=bronze_consumer._MAX_BATCH_SIZE + 200,
+    )
+
+    table = DeltaTable(str(tmp_path / "orders")).to_pyarrow_table()
+    assert table.num_rows == bronze_consumer._MAX_BATCH_SIZE * 2
     assert calls["count"] == 2
     assert provider.commits[(topic, bronze_consumer._CONSUMER_GROUP_ID)] == 1

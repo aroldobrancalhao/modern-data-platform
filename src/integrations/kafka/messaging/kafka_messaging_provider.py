@@ -72,6 +72,30 @@ class KafkaMessagingProvider(MessagingProvider):
 
         return self._to_message(record)
 
+    def consume_batch(
+        self,
+        topic: str,
+        group_id: str,
+        max_messages: int,
+        timeout_seconds: float = 1.0,
+        auto_commit: bool = True,
+    ) -> list[Message]:
+
+        consumer = self._resolve_consumer(topic, group_id, auto_commit)
+
+        records = consumer.consume(max_messages, timeout_seconds)
+
+        messages: list[Message] = []
+
+        for record in records:
+
+            if record.error():
+                raise RuntimeError(str(record.error()))
+
+            messages.append(self._to_message(record))
+
+        return messages
+
     def commit(
         self,
         topic: str,
@@ -114,9 +138,23 @@ class KafkaMessagingProvider(MessagingProvider):
             # treat that as "as far behind as the broker's own low
             # watermark", not 0, so an idle-but-assigned partition
             # doesn't understate lag.
+            #
+            # cached=True: per get_watermark_offsets' own docstring,
+            # the high offset (the side that matters -- lag is
+            # high - position) is updated on every message fetched
+            # for the partition, so it's effectively real-time for a
+            # partition being actively polled, which is always true
+            # here (this is only ever called right after a successful
+            # flush, i.e. after consume() has been fetching from this
+            # topic continuously). cached=False was measured at
+            # 1.2-1.5s per call (3 partitions) in this project's own
+            # environment -- a real, significant cost on the hot path
+            # given this runs on every flush. The low offset's cache
+            # only refreshes with statistics.interval.ms set, which
+            # KafkaContext.create_consumer() now does.
             low, high = consumer.get_watermark_offsets(
                 TopicPartition(partition.topic, partition.partition),
-                cached=False,
+                cached=True,
             )
 
             current = partition.offset if partition.offset >= 0 else low

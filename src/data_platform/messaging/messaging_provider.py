@@ -71,6 +71,34 @@ class MessagingProvider(BaseProvider, ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def consume_batch(
+        self,
+        topic: str,
+        group_id: str,
+        max_messages: int,
+        timeout_seconds: float = 1.0,
+        auto_commit: bool = True,
+    ) -> list[Message]:
+        """
+        Polls up to ``max_messages`` from a topic in a single call.
+
+        Returns as soon as at least one message is available, or an
+        empty list if none becomes available within timeout_seconds --
+        it does not block waiting for the full ``max_messages`` to
+        fill (same "return whatever's ready" semantics as consume(),
+        just for a batch instead of one message). Added alongside
+        consume() rather than replacing it: consume() is a simpler
+        contract for a caller that genuinely wants one message at a
+        time, and changing its return type would be a breaking change
+        for no benefit to that caller.
+
+        Same ``auto_commit`` caveat as consume() -- only takes effect
+        on the first call that resolves a consumer for (topic,
+        group_id).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def commit(
         self,
         topic: str,

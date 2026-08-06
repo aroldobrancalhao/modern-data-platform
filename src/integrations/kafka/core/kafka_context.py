@@ -68,5 +68,38 @@ class KafkaContext:
                 "group.id": group_id,
                 "auto.offset.reset": "earliest",
                 "enable.auto.commit": enable_auto_commit,
+                # Without this, get_watermark_offsets(cached=True)'s
+                # low-offset side never refreshes (per its own
+                # docstring: "low offset is updated periodically if
+                # statistics.interval.ms is set") -- the high offset
+                # doesn't need it (updated on every fetched message),
+                # but low is the fallback consumer_lag() uses for a
+                # partition with no committed position yet. 30s to
+                # match _MAX_BATCH_AGE_SECONDS
+                # (streaming/consumers/bronze_consumer.py) -- no
+                # per-call network cost, just periodic internal
+                # bookkeeping.
+                "statistics.interval.ms": 30000,
+                # librdkafka's default (65536 KB = 64 MiB) applies per
+                # partition, not per Consumer -- confirmed live via a
+                # temporary stats_cb plus `kafka-topics --describe`
+                # (every marketplace topic has 3 partitions), which
+                # means the real per-Consumer ceiling was 3 x 64MiB =
+                # 192MB, not 64MB. The Bronze Consumer holds 16
+                # independent Consumer instances (one per entity, see
+                # KafkaMessagingProvider._resolve_consumer), each
+                # prefetching from a topic with a deep backlog --
+                # measured live at ~1.5GB aggregate RSS, right at the
+                # container's 1536M limit with no real headroom (see
+                # "Bronze Consumer's ~1.5GB memory plateau..." in
+                # docs/architecture/roadmap-next-steps.md). 16384 (16
+                # MiB/partition x 3 partitions = 48MB/consumer, x 16
+                # consumers = 768MB worst case) brings that down to a
+                # range with real margin. Confirmed live afterward:
+                # RSS dropped to ~755-865MB and per-topic throughput
+                # actually improved (~1.8x) rather than regressing --
+                # the smaller prefetch buffer never became the
+                # bottleneck the pre-change analysis worried it might.
+                "queued.max.messages.kbytes": 16384,
             }
         )

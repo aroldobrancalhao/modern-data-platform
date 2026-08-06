@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -90,15 +91,61 @@ CONSUMER_LAG = Gauge(
     labelnames=("entity", "topic"),
 )
 
+# Added to measure the before/after effect of the 3 throughput changes
+# tracked in docs/architecture/roadmap-next-steps.md ("Bronze
+# Consumer's round-robin poll loop is throughput-bound") -- kept
+# permanently now that plan is complete (see "Item 2 (parallelize
+# flushes) implemented" in that same doc): a genuinely useful
+# operational signal -- "how long does one full pass over every topic
+# take" -- not just a throwaway measurement tool.
+ROUND_DURATION = Histogram(
+    "mdp_bronze_round_duration_seconds",
+    "Duration of one full round-robin pass over every subscribed topic.",
+    buckets=(1, 2.5, 5, 10, 20, 30, 45, 60, 90, 120, 180),
+)
+
 _TOPIC_PREFIX = "marketplace.marketplace."
 
 _CONSUMER_GROUP_ID = "bronze-consumer"
 
 _MAX_BATCH_SIZE = 100
 
+# Caps a single consume_batch() call independently of _MAX_BATCH_SIZE
+# (the buffer's own flush threshold): 100 messages fetched and
+# flushed in one shot, under real backlog, was enough to OOM a fresh
+# process before completing even one round-robin pass (confirmed live,
+# 3 isolated attempts, all killed by the kernel cgroup OOM killer --
+# see docs/architecture/roadmap-next-steps.md). 25 is a quarter of
+# _MAX_BATCH_SIZE -- conservative, chosen empirically after 100 failed,
+# not derived from a formula. A buffer can still fill up to
+# _MAX_BATCH_SIZE across multiple consume_batch() calls in successive
+# rounds; this only bounds how much a single call can add at once.
+_MAX_POLL_BATCH_SIZE = 25
+
 _MAX_BATCH_AGE_SECONDS = 30.0
 
 _POLL_TIMEOUT_SECONDS = 1.0
+
+# Bounds how many entities can flush (write_deltalake() + commit())
+# concurrently -- see run_bronze_consumer()'s in_flight tracking,
+# which also caps concurrency at 1 flush per *entity* regardless of
+# this pool size. Derived from real, live measurement, not a formula
+# guess (see "Batch-poll (max_messages=25) validated" and the
+# librdkafka prefetch-buffer entry that follows it in
+# docs/architecture/roadmap-next-steps.md):
+#   - idle-of-flush baseline RSS (Kafka prefetch buffers capped via
+#     queued.max.messages.kbytes, no flush in progress): ~750MB
+#   - per-flush retained-memory footprint, sampled clean post-Kafka-fix
+#     (rss_before/after around write_deltalake()+commit(), 40 samples
+#     across all 14 active entities): mostly <6MB, max observed 26.5MB
+#   - conservative per-flush budget: 40MB (safety margin over that max)
+#   - target ceiling even at full pool utilization: 1200MB, i.e. ~336MB
+#     (~22%) of slack left under the container's 1536M limit for the
+#     Kafka buffers' own natural fluctuation, GC, and unmeasured
+#     variance
+#   - (1200 - 750) / 40 = 11.25 concurrent flushes -- rounded down to
+#     a rounder, more conservative number
+_FLUSH_POOL_SIZE = 8
 
 STREAMING_ENTITIES: tuple[str, ...] = (
     "carriers",
@@ -175,46 +222,133 @@ def run_bronze_consumer(
     writing them to that entity's Bronze Delta table and committing
     the consumed offsets.
 
+    Flushes (``_flush()`` -- ``write_deltalake()`` + ``commit()``) run
+    on a ``_FLUSH_POOL_SIZE``-worker thread pool instead of inline, so
+    a slow S3 write for one entity no longer blocks every other
+    entity's round-robin turn behind it. ``in_flight`` caps this at
+    *one* flush per *entity* at a time (independent of pool size) and
+    is the reason it's safe for the entity's ``_EntityBuffer`` to be
+    mutated (``buffer.add()``) from the main thread while a previous
+    flush for that same entity is still running in a worker thread:
+    an entity's buffer is only ever touched by the main loop when that
+    entity has no flush in flight, and only ever read by the one
+    worker thread flushing it -- never both at once. See
+    "Batch-poll (max_messages=25) validated" and the librdkafka
+    prefetch-buffer entry that follows it in
+    docs/architecture/roadmap-next-steps.md for how ``_FLUSH_POOL_SIZE``
+    was sized.
+
     ``max_iterations`` bounds the number of round-robin cycles across
     all topics -- ``None`` (the default) runs forever, which is what
     the production entrypoint (``scripts/run_bronze_consumer.py``)
     wants; tests pass a small integer instead so the loop terminates
-    on its own.
+    on its own. Any flush still in flight when the loop ends is
+    drained (``ThreadPoolExecutor``'s own ``__exit__`` blocks until
+    every submitted task completes) before this function returns, so
+    callers -- tests included -- always see a fully flushed, quiescent
+    state once it does.
     """
 
     schemas = {entity: resolve_bronze_schema(entity) for entity in entities}
 
     buffers = {entity: _EntityBuffer() for entity in entities}
 
+    in_flight: dict[str, Future[None]] = {}
+
     iterations = 0
 
-    while max_iterations is None or iterations < max_iterations:
+    with ThreadPoolExecutor(max_workers=_FLUSH_POOL_SIZE) as executor:
 
-        for entity in entities:
-            topic = topic_for(entity)
+        while max_iterations is None or iterations < max_iterations:
 
-            message = provider.consume(
-                topic,
-                group_id=_CONSUMER_GROUP_ID,
-                timeout_seconds=_POLL_TIMEOUT_SECONDS,
-                auto_commit=False,
-            )
+            with ROUND_DURATION.time():
 
-            if message is not None:
-                _buffer_message(entity, topic, message.value, buffers[entity])
+                for entity in entities:
+                    topic = topic_for(entity)
 
-            buffer = buffers[entity]
+                    buffer = buffers[entity]
 
-            if buffer.is_due(time.monotonic()):
-                _flush(
-                    provider,
-                    entity=entity,
-                    topic=topic,
-                    buffer=buffer,
-                    schema=schemas[entity],
-                )
+                    future = in_flight.get(entity)
 
-        iterations += 1
+                    if future is not None and not future.done():
+                        # A flush for this entity is still running --
+                        # skip its turn entirely this round (both
+                        # consuming and re-checking is_due()) rather
+                        # than mutate or re-flush a buffer a worker
+                        # thread might still be reading. Its own
+                        # Consumer keeps prefetching in the background
+                        # regardless (see the librdkafka prefetch-
+                        # buffer roadmap entry), so nothing is lost by
+                        # waiting -- just deferred a round or two.
+                        #
+                        # time.sleep(0) explicitly yields the GIL:
+                        # without it, a tight loop with nothing else to
+                        # do (few entities, no real network I/O to
+                        # naturally release the GIL) can spin through
+                        # every remaining round faster than the worker
+                        # thread ever gets scheduled to actually run --
+                        # confirmed live, this made a single-entity
+                        # retry test fail 100% of the time regardless
+                        # of how many extra rounds its max_iterations
+                        # budget gave it. Production's real
+                        # consume_batch() network calls make this less
+                        # likely to matter there, but it's not
+                        # guaranteed there either -- explicit is safer
+                        # than relying on incidental I/O.
+                        time.sleep(0)
+
+                        continue
+
+                    if future is not None:
+                        # _flush() catches and logs every write/commit
+                        # failure internally and never raises, so
+                        # .result() should always be a no-op here --
+                        # calling it anyway surfaces a genuine bug in
+                        # _flush() itself instead of silently
+                        # swallowing it, the same way a fire-and-forget
+                        # submit() never would.
+                        future.result()
+
+                        del in_flight[entity]
+
+                    # Caps the batch at whatever room is actually left
+                    # in this entity's buffer (so a single
+                    # consume_batch() call can't overshoot
+                    # _MAX_BATCH_SIZE) and at _MAX_POLL_BATCH_SIZE (so
+                    # it can't pull an OOM-sized burst in one call
+                    # either -- see that constant's own comment). If
+                    # the buffer is already full, skip polling this
+                    # entity entirely -- is_due() below will flush it
+                    # this same iteration, freeing capacity for the
+                    # next one.
+                    remaining = min(
+                        _MAX_BATCH_SIZE - len(buffer.records),
+                        _MAX_POLL_BATCH_SIZE,
+                    )
+
+                    if remaining > 0:
+                        messages = provider.consume_batch(
+                            topic,
+                            group_id=_CONSUMER_GROUP_ID,
+                            max_messages=remaining,
+                            timeout_seconds=_POLL_TIMEOUT_SECONDS,
+                            auto_commit=False,
+                        )
+
+                        for message in messages:
+                            _buffer_message(entity, topic, message.value, buffer)
+
+                    if buffer.is_due(time.monotonic()):
+                        in_flight[entity] = executor.submit(
+                            _flush,
+                            provider,
+                            entity=entity,
+                            topic=topic,
+                            buffer=buffer,
+                            schema=schemas[entity],
+                        )
+
+            iterations += 1
 
 
 def _buffer_message(
@@ -253,18 +387,31 @@ def _flush(
 
         with WRITE_DURATION.labels(entity=entity).time():
             write_deltalake(StorageConfig.bronze(entity), table, mode="append")
+
+        # In-scope with the write on purpose: a commit failure (e.g.
+        # KafkaException from a lost partition assignment, a
+        # heartbeat/session timeout, or an unreachable broker -- all
+        # observed live, see docs/architecture/roadmap-next-steps.md)
+        # used to propagate uncaught out of run_bronze_consumer() and
+        # kill the process. Handling it the same way as a write
+        # failure -- log, leave the buffer intact, retry next cycle --
+        # is deliberate: the buffer isn't cleared below, so the next
+        # is_due() flush retries write_deltalake() *and* commit()
+        # against the same records. If only the commit had failed
+        # (the write already landed), that retry re-appends the same
+        # rows -- an accepted duplicate, per this module's docstring
+        # ("Bronze keeps every version of a row it has ever seen").
+        provider.commit(topic, group_id=_CONSUMER_GROUP_ID)
     except Exception:
         WRITE_FAILURES.labels(entity=entity).inc()
 
         logger.exception(
-            "Bronze write failed for entity '%s' (%d buffered records) -- "
+            "Bronze flush failed for entity '%s' (%d buffered records) -- "
             "offsets left uncommitted, will retry next cycle.",
             entity,
             len(buffer.records),
         )
         return
-
-    provider.commit(topic, group_id=_CONSUMER_GROUP_ID)
 
     RECORDS_WRITTEN.labels(entity=entity).inc(len(table))
 
