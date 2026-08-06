@@ -41,8 +41,21 @@ class StorageLocation:
         # Remove leading slash
         key = key.lstrip("/")
 
+        # S3 "folder marker" objects (zero-byte keys that end in "/",
+        # e.g. Delta's own bronze/customers/_delta_log/_staged_commits/)
+        # are a distinct key from the same path without the slash --
+        # PurePosixPath.as_posix() below strips it, which used to
+        # silently mistarget delete() at a key that never existed
+        # while the real, slash-terminated object stayed untouched
+        # (see docs/architecture/roadmap-next-steps.md). Remembered
+        # here and restored after normalization instead.
+        had_trailing_slash = key.endswith("/")
+
         # Normalize duplicated slashes
         key = PurePosixPath(key).as_posix()
+
+        if had_trailing_slash and not key.endswith("/"):
+            key = f"{key}/"
 
         object.__setattr__(self, "scheme", scheme)
         object.__setattr__(self, "bucket", bucket)

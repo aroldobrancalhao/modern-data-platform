@@ -284,6 +284,61 @@ def test_list_returns_empty_when_bucket_is_empty(
     assert list(provider.list(location)) == []
 
 
+def test_list_then_delete_preserves_trailing_slash_on_folder_marker_keys(
+    provider: S3StorageProvider,
+    client: MagicMock,
+    location: StorageLocation,
+) -> None:
+    """
+    Regression test for the trailing-slash bug fixed in
+    StorageLocation.__post_init__ (see
+    docs/architecture/roadmap-next-steps.md): a zero-byte S3 "folder
+    marker" key ending in "/" (e.g. Delta's own
+    bronze/customers/_delta_log/_staged_commits/) is a distinct key
+    from the same path without the slash. Before the fix, list()'s
+    real S3 response key round-tripped through StorageLocation and
+    lost its trailing slash, so a follow-up delete() silently targeted
+    a key that never existed while the real marker stayed untouched.
+    """
+
+    paginator = MagicMock()
+
+    paginator.paginate.return_value = [
+        {
+            "Contents": [
+                {
+                    "Key": "bronze/customers/_delta_log/_staged_commits/",
+                    "Size": 0,
+                    "ETag": '"etag"',
+                    "LastModified": object(),
+                }
+            ]
+        }
+    ]
+
+    client.get_paginator.return_value = paginator
+
+    objects = list(provider.list(location))
+
+    assert len(objects) == 1
+
+    marker_location = objects[0].location
+
+    # The bug: this used to be "bronze/customers/_delta_log/_staged_commits"
+    # (no trailing slash) -- a key that was never the real S3 object.
+    assert (
+        marker_location.key
+        == "bronze/customers/_delta_log/_staged_commits/"
+    )
+
+    provider.delete(marker_location)
+
+    client.delete_object.assert_called_once_with(
+        Bucket="bucket",
+        Key="bronze/customers/_delta_log/_staged_commits/",
+    )
+
+
 def test_head(
     provider: S3StorageProvider,
     client: MagicMock,

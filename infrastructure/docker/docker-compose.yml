@@ -179,6 +179,17 @@ services:
 
     restart: unless-stopped
 
+    deploy:
+      resources:
+        limits:
+          # Etapa B (docs/architecture/roadmap-next-steps.md): first
+          # container-level ceiling this service has ever had. ~2.5x
+          # the ~204MB steady-state RSS observed live (two docker
+          # stats readings, 3min apart, stable) -- generous because
+          # this reading is Airflow mostly idle, not under a real DAG
+          # run's connection/query load. Revisit if it OOMs.
+          memory: 512M
+
     networks:
 
       - mdp-network
@@ -221,6 +232,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. Steady-
+          # state RSS observed live at only ~32MB (mostly idle) --
+          # sized well above a pure multiplier of that (256M, not
+          # ~64-128M) because this DB takes real query/write load
+          # during actual pipeline runs (Spark batch writes, quality
+          # checks) that this idle snapshot doesn't capture. Revisit
+          # if it OOMs under real pipeline load.
+          memory: 256M
 
     networks:
       - mdp-network
@@ -334,6 +357,17 @@ services:
       KAFKA_CLUSTERS_0_NAME: Modern Data Platform
 
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. ~1.8x
+          # the ~283MB steady-state RSS observed live (two readings,
+          # 3min apart, stable) -- a lighter multiplier than most
+          # other Etapa B services since this is a UI-only proxy over
+          # Kafka's REST/admin APIs, no heavy compute of its own.
+          # Revisit if it OOMs.
+          memory: 512M
 
     networks:
 
@@ -481,6 +515,18 @@ services:
       retries: 50
       start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. ~8.5x
+          # the ~15MB steady-state RSS observed live -- a floor-based
+          # number rather than a pure multiplier (128M matches the
+          # 64M floor already used for pushgateway/statsd-exporter,
+          # doubled since Redis backs Airflow's Celery broker and
+          # could hold more in-flight task messages under real DAG
+          # concurrency than this idle snapshot shows). Revisit if it
+          # OOMs.
+          memory: 128M
     networks:
      - mdp-network
 
@@ -501,6 +547,17 @@ services:
       <<: *airflow-common-depends-on
       airflow-bootstrap:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. ~2.3x
+          # the ~1311MB steady-state RSS observed live (two readings,
+          # 3min apart, stable) -- the biggest of the 5 Airflow
+          # components already at idle, so the largest margin of the
+          # group for request-burst headroom. This reading is Airflow
+          # mostly idle, not under real concurrent API load. Revisit
+          # if it OOMs.
+          memory: 3072M
 
   airflow-scheduler:
     <<: *airflow-common
@@ -517,6 +574,13 @@ services:
       <<: *airflow-common-depends-on
       airflow-bootstrap:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. ~2.2x
+          # the ~355MB steady-state RSS observed live (two readings,
+          # 3min apart, stable). Revisit if it OOMs.
+          memory: 768M
 
   airflow-dag-processor:
     <<: *airflow-common
@@ -533,6 +597,16 @@ services:
       <<: *airflow-common-depends-on
       airflow-bootstrap:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. Two live
+          # readings 3min apart ranged 260-392MB (this component
+          # re-parses DAG files periodically, more variable than the
+          # other Airflow components) -- 1024M gives margin over the
+          # higher reading for future DAG-count growth. Revisit if it
+          # OOMs.
+          memory: 1024M
 
   airflow-worker:
     <<: *airflow-common
@@ -559,6 +633,17 @@ services:
         condition: service_healthy
       airflow-bootstrap:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. ~2.6x
+          # the ~990MB steady-state RSS observed live (two readings,
+          # 3min apart, stable) -- the most generous multiplier of
+          # the group: this component executes actual DAG task code,
+          # and neither reading was taken during a real heavy task
+          # run, so its true peak-under-load is unconfirmed. Revisit
+          # if it OOMs.
+          memory: 2560M
 
   airflow-triggerer:
     <<: *airflow-common
@@ -575,6 +660,20 @@ services:
       <<: *airflow-common-depends-on
       airflow-bootstrap:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          # Etapa B: first ceiling this service has ever had. The
+          # ~262MB pre-restart baseline undershot what this service
+          # actually settles at post-restart with its own limit
+          # applied -- 512M (originally chosen as ~2x that baseline)
+          # was observed live at 367.8MB/512M (71.83%), stable across
+          # two readings 90s apart (not still climbing, but tighter
+          # margin than intended). Raised to 768M (~2x the actually-
+          # observed 367.8MB) instead of leaving this at a tight
+          # margin marked "revisit if it OOMs". Revisit again if it
+          # OOMs even at this level.
+          memory: 768M
 
   airflow-init:
     <<: *airflow-common

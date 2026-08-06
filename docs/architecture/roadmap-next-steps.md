@@ -8,42 +8,85 @@ isn't lost between sessions. Entries are removed once implemented.
 
 ---
 
-## ParallelExecutor
+## ParallelExecutor -- deferred, no real use case yet
 
-Today only `SequentialExecutor(BaseExecutor)` exists. `BaseExecutor`
-was already designed to be pluggable — Fase 1 of the ADR-010
+Today only `SequentialExecutor(BaseExecutor)` exists. The original
+version of this entry claimed `BaseExecutor`/`Stage`/
+`ProcessingContext`/`Pipeline` already supported a future
+`ParallelExecutor` (independent Stages via `asyncio.gather`) with no
+changes needed, on the theory that Fase 1 of the ADR-010
 consolidation roadmap made `ExecutionRuntime` shared and injectable
-rather than tied to `SequentialExecutor` specifically — so a future
-`ParallelExecutor` (independent Stages running via `asyncio.gather`)
-should not require changes to `Stage`, `ProcessingContext` or
-`Pipeline`. It has not been written or tested yet.
+rather than tied to `SequentialExecutor` specifically. Investigated
+before writing any code (per this project's own convention of
+designing before implementing) -- **that premise does not hold**, for
+two structural reasons found by actually reading the code, not
+assumed:
 
-## StorageLocation silently mistargets trailing-slash S3 keys
+1. **`Pipeline` has no stage-independence/dependency metadata.**
+   `Pipeline.stages` is a plain `tuple[Stage, ...]`, ordered, with no
+   graph, no groups, nothing expressing "these two are independent"
+   vs "this one depends on that one's output". Running
+   `asyncio.gather` over the whole tuple silently assumes every stage
+   in every pipeline is always independent of every other -- an
+   assumption the type system can't check and nothing prevents a
+   caller from violating, producing silently-wrong results (not an
+   error) if a pipeline with real inter-stage dependencies gets
+   parallelized.
 
-`StorageLocation.__post_init__` normalizes `key` via
-`PurePosixPath(key).as_posix()`, which strips trailing slashes. S3
-"folder marker" objects (zero-byte keys that *do* end in `/`, e.g.
-Delta's own `bronze/customers/_delta_log/_staged_commits/`) are a
-distinct key from the same path without the slash. `list()` returns
-the real, slash-terminated key from S3, but building a
-`StorageLocation` from it (or passing it back into `delete()`) quietly
-drops the slash -- so the delete request goes to a key that doesn't
-exist, while the real object stays untouched, with no error raised.
+2. **`ExecutionRuntime` writes single, shared state slots -- not
+   safe for concurrent stages.** `stage_started()`, `stage_result()`,
+   `stage_failed()` write into single `ProcessingContext` keys
+   (`ProcessingKeys.CURRENT_STAGE`, `STAGE_RESULT`, `EXCEPTION`), not
+   a per-stage or keyed collection. Two stages running concurrently
+   under `asyncio.gather`, sharing the one `ExecutionRuntime`/
+   `ProcessingContext` instance `BaseExecutor.execute()` already
+   creates per pipeline run today, would race to overwrite the same
+   fields -- any Hook or Policy reading `CURRENT_STAGE`/`STAGE_RESULT`
+   during that window could observe the wrong stage's data. This is
+   the engine's central observability/policy-decision mechanism, not
+   an edge case.
 
-Found while cleaning `bronze/customers/`, `silver/customers/` and
-`gold/customers/` before a full_pipeline rerun: `S3StorageProvider.delete()`
-reported success (no exception) for the `_staged_commits/` marker in
-all three prefixes, but a follow-up `list()` still showed it present
-every time -- confirmed via `aws s3api list-object-versions` that the
-provider had been deleting `..._staged_commits` (no slash, never
-existed) instead of `..._staged_commits/` (the real key). Worked
-around this once via `aws s3 rm` directly on the slash-terminated key;
-not fixed in code yet.
+What *doesn't* need to change: `Executor`/`BaseExecutor._execute_pipeline()`
+is a clean abstract hook a `ParallelExecutor` could plug into as-is,
+and `PipelineResult` already models partial failure natively
+(`successful_stages`/`failed_stages`/`has_failures` over a tuple of
+`StageResult`).
 
-**Not corrected now**: small, isolated bug, doesn't block anything
-already built -- just needs `StorageLocation` (or `S3StorageProvider`)
-to preserve a trailing slash when one was present in the original key,
-instead of normalizing it away.
+Partial-failure semantics also need a decision, unresolved: today's
+default `FailurePolicy(fail_fast=True)` cancels the pipeline on any
+stage failure, a decision that assumed strictly sequential execution
+("cancel" = "don't start the next stage"). Under concurrency this
+forks -- either a failure aborts in-flight sibling stages too (risky
+with real side effects like in-progress S3/DB writes, and
+`asyncio.gather` doesn't cleanly support cancelling a coroutine
+mid-effect), or every stage in the current parallel group always
+runs to completion (`asyncio.gather(..., return_exceptions=True)`)
+and "cancel" only applies to launching the *next* group.
+
+**3 options considered:**
+1. Trust the caller -- `Pipeline` stays a flat list, `ParallelExecutor`
+   parallelizes everything, documented as "only use with genuinely
+   independent stages"; `ExecutionRuntime` gets a lock or per-stage
+   state to stop colliding. Simplest, matches the original no-Pipeline-
+   change premise, but pushes correctness onto whoever assembles the
+   pipeline, silently.
+2. Explicit groups -- `Pipeline` gains a way to express parallel
+   groups (e.g. nested tuples: a nested `tuple[Stage, ...]` = a group
+   that runs in parallel, groups run in sequence). The only option
+   that expresses real dependency without trusting the caller, but
+   does change `Pipeline`, contradicting the original premise.
+3. Don't implement it now.
+
+**Decision: option 3, deferred.** No real use case exists inside the
+processing framework today -- the concrete need that originally
+motivated this (Bronze Consumer's flush bottleneck) was solved with a
+plain `ThreadPoolExecutor` local to that module, outside the
+processing framework entirely (see "Item 2 (parallelize flushes)
+implemented" above). Revisit if a real pipeline with genuinely
+independent stages shows up and the sequential cost actually matters
+-- at that point, resolve gaps 1 and 2 above (option 2 is the
+correctness-preferred fix for gap 1) and decide the partial-failure
+semantics before writing `ParallelExecutor` itself.
 
 ## dbt-athena `s3_data_naming = schema_table` has no atomic swap on rebuild
 
@@ -460,4 +503,16 @@ Not implemented now -- needs deciding which services are safe to stop
 independently (e.g. `debezium-connect` down doesn't affect
 Postgres/Kafka/batch-only work) before turning it into an actual
 profile split.
+
+**Update -- "Etapa B" complete:** every one of the 16 persistent
+services now has its own `deploy.resources.limits.memory` (previously
+7 did; the remaining 9 -- Airflow's 5 components, both Postgres
+instances, Redis, kafka-ui -- were sized the same way as the earlier
+7: live `docker stats` baseline, generous margin, applied, restarted,
+re-measured). This does not resolve the host-wide symptom described
+above -- summing every container's individual ceiling comes to
+~13GB+, still well past the host's 8GB+4GB swap budget -- it only
+means no single container can run away unbounded anymore. The
+"possible future action" above is still the real fix for the
+aggregate problem.
 
