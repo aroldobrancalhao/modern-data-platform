@@ -248,6 +248,99 @@ services:
     networks:
       - mdp-network
 
+  postgres-metabase:
+    image: postgres:17
+    container_name: mdp-postgres-metabase
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: metabase
+      POSTGRES_PASSWORD: metabase
+      POSTGRES_DB: metabase
+    # No published port: this is Metabase's own internal application
+    # state (dashboards/users/saved questions), not a datastore anyone
+    # queries directly -- same reasoning as `redis` (Celery's broker)
+    # staying internal-only, unlike postgres-marketplace/postgres-airflow
+    # which are exposed for host-side psql access on purpose.
+    volumes:
+      - postgres_metabase_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metabase -d metabase"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          # First ceiling this service has ever had -- no live reading
+          # yet (new service). Sized like postgres-marketplace (256M):
+          # same "small, mostly-idle Postgres" shape, light load
+          # expected (Metabase's own app metadata, not pipeline data).
+          # Revisit once real usage is observed.
+          memory: 256M
+    networks:
+      - mdp-network
+
+  metabase:
+    image: metabase/metabase:v0.63.5
+    container_name: mdp-metabase
+    restart: unless-stopped
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres-metabase
+      MB_DB_PORT: 5432
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: metabase
+      MB_DB_PASS: metabase
+      # BI Reader IAM User (Terraform: module.bi_reader, security.tf) --
+      # dedicated, read-only, scoped to Gold/Athena/S3-gold. NOT the
+      # same AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY already used by
+      # Airflow above (those are terraform-admin's own key, copied into
+      # this same .env file) -- deliberately distinct variable names in
+      # .env so this service can't silently inherit the admin key by
+      # both sides pointing at the same variable.
+      AWS_ACCESS_KEY_ID: ${MDP_BI_READER_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${MDP_BI_READER_SECRET_ACCESS_KEY}
+      AWS_REGION: sa-east-1
+      # Found live: default JVM heap sizing on a containerized JDK is
+      # -XX:MaxRAMPercentage=25.0 -- 25% of the 1024M limit this
+      # service originally had (~247.5MB) OOM'd during driver
+      # registration, before boot even finished (RestartCount=1,
+      # OOMKilled=false -- the JVM's own heap ceiling, not a cgroup
+      # kill). JAVA_TOOL_OPTIONS is a standard JVM env var, honored by
+      # any `java` invocation regardless of Metabase's own config
+      # surface. Raised to 75% here, paired with the memory limit bump
+      # below (1536M x 75% ~= 1.15GB heap, ~380M left for
+      # metaspace/threads/direct buffers outside the heap).
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+    ports:
+      # 3000 is Grafana's host port already -- Metabase's own default
+      # (3000 inside the container) is remapped to 3001 on the host.
+      - "3001:3000"
+    depends_on:
+      postgres-metabase:
+        condition: service_healthy
+    healthcheck:
+      # Metabase's JVM boot is slow (typically 30-60s) -- start_period
+      # set generously; revisit against a real observed boot time.
+      test: ["CMD", "curl", "--fail", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          # Raised from the original 1024M: at that limit, the JVM's
+          # default -XX:MaxRAMPercentage=25.0 gave only ~247.5MB heap,
+          # which OOM'd during boot (driver registration) -- see
+          # JAVA_TOOL_OPTIONS above. 1536M x the new 75% ceiling
+          # leaves ~380M outside the heap for metaspace/threads/direct
+          # buffers. Revisit once real usage is observed.
+          memory: 1536M
+    networks:
+      - mdp-network
+
   kafka:
 
     image: confluentinc/cp-kafka:7.8.0
@@ -1051,6 +1144,8 @@ volumes:
   postgres_airflow_data:
 
   postgres_marketplace_data:
+
+  postgres_metabase_data:
 
   kafka_data:
 

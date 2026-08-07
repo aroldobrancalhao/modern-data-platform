@@ -269,3 +269,220 @@ module "glue_iam" {
 
   tags = local.default_tags
 }
+
+##########################################################
+# BI Reader Policy Document
+##########################################################
+#
+# Read-only identity for external BI tools that query Gold over
+# Athena: Metabase (containerized, this compose) and Power BI
+# (external, local/gateway). Neither can assume an IAM role natively
+# without extra plumbing (Metabase's Athena driver and the Athena ODBC
+# driver both authenticate with a static access key or the default
+# credential chain, not sts:AssumeRole) -- an IAM User + long-lived
+# access key is the standard shape for this kind of external,
+# non-AWS-compute consumer, same reasoning as any BI/analytics client
+# outside the account. Scope is deliberately narrow: only the Gold
+# database/tables in Glue, only the `gold/` and `athena/` (query
+# staging) prefixes in the data lake bucket, only the one Athena
+# workgroup -- no access to bronze/, silver/, or any other Glue
+# database.
+
+data "aws_iam_policy_document" "bi_reader" {
+
+  statement {
+
+    sid = "AthenaQuery"
+
+    effect = "Allow"
+
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:StopQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:GetQueryResultsStream",
+      "athena:ListQueryExecutions",
+      "athena:GetWorkGroup"
+    ]
+
+    resources = [
+      module.athena.workgroup_arn
+    ]
+  }
+
+  statement {
+
+    sid = "AthenaListDataCatalogs"
+
+    effect = "Allow"
+
+    actions = [
+      "athena:ListDataCatalogs"
+    ]
+
+    # Found live: the Metabase Athena driver's metadata-sync step
+    # calls this before listing tables. Account-wide enumeration
+    # action (no ARN it can be scoped to, per AWS's own Athena action
+    # reference -- "Resource: *" is the only valid form) -- returns
+    # only data catalog *names* (e.g. "AwsDataCatalog"), no schema/
+    # table/data content, so unconditioned here isn't a least-
+    # privilege compromise the way an unconditioned S3 grant would be.
+    resources = ["*"]
+  }
+
+  statement {
+
+    sid = "AthenaListDatabasesAndTables"
+
+    effect = "Allow"
+
+    actions = [
+      # Found live: Metabase's Athena driver metadata-sync step calls
+      # Athena's own ListDatabases/GetDatabase/*TableMetadata (Athena
+      # API, distinct from the Glue Data Catalog Get* actions below --
+      # both exist against the same underlying catalog, Athena's own
+      # API layer requires its own grants). Scoped to the one data
+      # catalog this project uses (AwsDataCatalog, confirmed via
+      # athena:ListDataCatalogs above), not "*" -- these actions
+      # support a datacatalog-level ARN per AWS's Athena action
+      # reference.
+      "athena:ListDatabases",
+      "athena:GetDatabase",
+      "athena:ListTableMetadata",
+      "athena:GetTableMetadata"
+    ]
+
+    resources = [
+      "arn:aws:athena:${var.aws_region}:${var.account_id}:datacatalog/AwsDataCatalog"
+    ]
+  }
+
+  statement {
+
+    sid = "GlueCatalogReadGold"
+
+    effect = "Allow"
+
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetDatabases",
+      "glue:GetTable",
+      "glue:GetTables",
+      "glue:GetPartition",
+      "glue:GetPartitions",
+      "glue:BatchGetPartition"
+    ]
+
+    resources = [
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${module.glue_gold.database_name}",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${module.glue_gold.database_name}/*"
+    ]
+  }
+
+  statement {
+
+    sid = "S3ListGold"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      module.datalake.bucket_arn
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      # Reverted to gold/* only: the "" / "athena/*" values added
+      # earlier didn't fix the HeadBucket/GetBucketLocation issue
+      # (those calls carry no s3:prefix in their request context at
+      # all -- a condition can't match a key that isn't present,
+      # regardless of listed values) and staging moved to its own
+      # dedicated bucket (module.athena_staging) instead, so there's
+      # no longer any reason to reference athena/* here.
+      values = ["gold/*"]
+    }
+  }
+
+  statement {
+
+    sid = "S3ReadGold"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject"
+    ]
+
+    resources = [
+      "${module.datalake.bucket_arn}/gold/*"
+    ]
+  }
+
+  statement {
+
+    sid = "AthenaStagingBucketMetadata"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
+    ]
+
+    resources = [
+      module.athena_staging.bucket_arn
+    ]
+
+    # Unconditioned, unlike the main datalake bucket's ListGold
+    # statement above -- this bucket holds nothing but Athena query
+    # staging data, so bucket-level access here isn't a broadening
+    # beyond what the identity needs, it's the correct scope for a
+    # single-purpose bucket. Satisfies the Athena JDBC driver's
+    # HeadBucket/GetBucketLocation connection-test step, which sends
+    # no s3:prefix and so can never satisfy a prefix condition (see
+    # ListGold's comment).
+  }
+
+  statement {
+
+    sid = "S3AthenaQueryStaging"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListMultipartUploadParts",
+      "s3:AbortMultipartUpload"
+    ]
+
+    resources = [
+      "${module.athena_staging.bucket_arn}/*"
+    ]
+  }
+}
+
+##########################################################
+# BI Reader IAM User
+##########################################################
+
+module "bi_reader" {
+
+  source = "../../modules/security/iam_user"
+
+  user_name = "mdp-bi-reader-dev"
+
+  policy_name = "mdp-bi-reader-policy-dev"
+
+  description = "Read-only access to the Gold layer (Athena/Glue/S3) for external BI tools (Metabase, Power BI)."
+
+  policy = data.aws_iam_policy_document.bi_reader.json
+
+  tags = local.default_tags
+}

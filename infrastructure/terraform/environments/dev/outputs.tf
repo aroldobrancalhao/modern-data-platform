@@ -29,3 +29,15 @@ output "athena_workgroup" {
 output "databricks_uc_role_arn" {
   value = aws_iam_role.databricks_uc.arn
 }
+
+output "bi_reader_access_key_id" {
+  description = "Access Key ID for the BI Reader IAM User (Metabase/Power BI). Not a secret on its own, but paired here with the secret key -- treat the pair as sensitive."
+  value       = module.bi_reader.access_key_id
+  sensitive   = true
+}
+
+output "bi_reader_secret_access_key" {
+  description = "Secret Access Key for the BI Reader IAM User (Metabase/Power BI). Read once with `terraform output -raw bi_reader_secret_access_key` and paste into infrastructure/docker/.env -- never logged or committed."
+  value       = module.bi_reader.secret_access_key
+  sensitive   = true
+}

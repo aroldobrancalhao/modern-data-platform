@@ -54,6 +54,8 @@ Thumbs.db
 
 .env
 .env.*
+!.env.example
+!infrastructure/docker/.env.example
 
 
 # ==========================
