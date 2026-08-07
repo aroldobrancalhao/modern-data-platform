@@ -530,6 +530,22 @@ Current ADRs:
 
 ---
 
+# Business Intelligence
+
+Two BI integrations against the same Gold layer over Athena, tool-agnostic by design: dbt models the star schema once (`dbt/models/gold/`), any BI tool queries it independently through Athena, none of them tied to how the other connects.
+
+## Metabase (containerized, done)
+
+- `metabase` + `postgres-metabase` services (`infrastructure/docker/docker-compose.yml`) -- `http://localhost:3001`.
+- Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`), not `terraform-admin` -- scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated Athena staging bucket.
+- First real dashboard, **Gold Layer Overview** (`http://localhost:3001/dashboard/2`): total orders, orders by day, top products by revenue, top sellers by order count, average order value. Built via the Metabase API using Native Query (SQL), not the visual builder, so every question is versioned as plain text instead of living only in Metabase's own metadata database -- see `dashboards/metabase/` (SQL sources, data-cardinality caveats, and a from-scratch recreation procedure, since Metabase's Serialization/export feature is Pro-only).
+
+## Power BI (planned, not yet connected)
+
+Investigated but not implemented yet. Connects to the same `mdp-bi-reader-dev` IAM User and `mdp-athena-dev` workgroup as Metabase -- no new IAM identity needed when this gets built, by design (both BI tools share one read-only access boundary). Standard path: the official AWS Athena ODBC driver, a DSN, Power BI Desktop (Import mode) validated against `fact_orders`/`dim_customers`/`dim_products` before considering Power BI Service + an On-premises Data Gateway for scheduled refresh. See `docs/architecture/roadmap-next-steps.md` for the full investigation and remaining steps.
+
+---
+
 # Project Roadmap
 
 Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
@@ -566,7 +582,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 
 ## Phase 5 — Analytics
 
-- 🔶 Dashboards -- Metabase (containerized, `infrastructure/docker/docker-compose.yml`) connected to Gold over Athena end to end. Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`) scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated staging bucket -- not `terraform-admin`. First real dashboard built via the Metabase API (Native Query/SQL, not the visual builder, so it stays versionable): **[Gold Layer Overview](dashboards/metabase/README.md)** -- total orders, orders by day, top products by revenue, top sellers by order count, average order value; SQL sources and data-cardinality caveats in `dashboards/metabase/`. Power BI (external, local/gateway) documented but not connected yet.
+- 🔶 Dashboards -- **Sprint 12 (BI) partially complete: Metabase done, Power BI pending.** Metabase (containerized, `infrastructure/docker/docker-compose.yml`) connected to Gold over Athena end to end. Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`) scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated staging bucket -- not `terraform-admin`. First real dashboard built via the Metabase API (Native Query/SQL, not the visual builder, so it stays versionable): **[Gold Layer Overview](dashboards/metabase/README.md)** -- total orders, orders by day, top products by revenue, top sellers by order count, average order value; SQL sources and data-cardinality caveats in `dashboards/metabase/`. Power BI investigated (ODBC driver, IAM reuse) but not connected -- see `docs/architecture/roadmap-next-steps.md`.
 - ⬜ Business KPIs
 
 ## Phase 6 — Observability

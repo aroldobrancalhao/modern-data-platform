@@ -169,6 +169,53 @@ above -- found stale (still pointing at the old `mdp-athena-dev`/old
 staging path) exactly because this DAG was about to start running for
 real; fixed alongside it, not a separate follow-up.
 
+## Power BI -- investigated this session, not implemented
+
+Sprint 12 (BI) closes this session as **partially complete**: Metabase
+is done (containerized, IAM-scoped, a real dashboard -- see the Bronze
+batch/streaming and Gold CTAS-location entries above, both found and
+fixed while building it). Power BI was investigated but not built.
+
+**Already decided/investigated, reusable when this gets picked up**:
+- **Connection mechanism**: no native Power BI connector for Athena --
+  the official AWS Athena ODBC driver + a DSN is the standard path.
+  Start with Power BI Desktop, Import mode; consider DirectQuery/Power
+  BI Service only once a real need for live/scheduled data shows up.
+- **IAM: no new identity needed.** `mdp-bi-reader-dev` (Terraform
+  `module.bi_reader`, created for Metabase) is already scoped to
+  exactly what Power BI needs too -- read-only, `mdp_gold_dev`
+  database/tables, the `gold/` S3 prefix, and the dedicated Athena
+  staging bucket. Both BI tools are meant to share this one boundary,
+  not get one each.
+- **Workgroup**: `mdp-athena-dev` (the ad-hoc/BI workgroup, left
+  untouched by the `mdp-athena-dbt-dev` split above) is what Power BI
+  should point at, same as Metabase -- not the dbt-build workgroup.
+
+**Remaining work**:
+1. Install the Athena ODBC driver locally, configure a DSN against
+   `mdp-athena-dev` using the `mdp-bi-reader-dev` credentials.
+2. Open Power BI Desktop, connect via the DSN, validate a real query
+   against `fact_orders`/`dim_customers`/`dim_products` -- the same
+   bar Metabase's connection was already held to
+   (`docs/architecture/roadmap-next-steps.md`'s Metabase entries,
+   `dashboards/metabase/README.md`).
+3. Decide Import vs DirectQuery. If scheduled refresh via Power BI
+   Service ever becomes a real requirement, revisit two things
+   already flagged as open elsewhere in this file: whether an
+   On-premises Data Gateway is needed, and whether `s3_data_naming:
+   schema_table`'s "no atomic swap on rebuild" (see the Gold
+   CTAS-location entry above) becomes a concurrency concern for Power
+   BI the same way it now genuinely is for Metabase.
+4. Document the final setup as a new ADR (connection method, auth
+   model, refresh strategy) once actually implemented -- not written
+   speculatively ahead of the real setup, same discipline as
+   ADR-011.
+
+**Not done this session**: closing this out needs a human at a
+machine with Power BI Desktop installed (Windows, typically) --
+outside what this session could drive end-to-end the way Metabase
+(containerized, fully API-scriptable, no separate desktop app) did.
+
 ## Fraud Detection (Sprint 15) deferred to v2
 
 Sprint 15 in `project-decisions.md`'s Roadmap names "Fraud Detection",
