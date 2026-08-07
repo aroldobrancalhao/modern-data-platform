@@ -21,10 +21,20 @@
 -- order_year/order_month are last in the select list on purpose --
 -- Athena's Hive CTAS requires partition columns to be the trailing
 -- columns of the query, in the order declared in partitioned_by.
+--
+-- external_location is explicit: see dim_customers.sql for why
+-- (workgroup enforce_workgroup_configuration neutralizes s3_data_dir/
+-- s3_data_naming for CTAS tables unless external_location is set).
+-- Confirmed no conflict between partitioned_by and external_location
+-- together outside HA mode (dbt-athena's table.sql only rejects that
+-- combination when `ha` config is also true, which these models
+-- don't set) -- and it's the officially documented Athena CTAS
+-- syntax (WITH (external_location=..., partitioned_by=ARRAY[...])).
 
 {{ config(
     materialized='table',
-    partitioned_by=['order_year', 'order_month']
+    partitioned_by=['order_year', 'order_month'],
+    external_location='s3://mdp-datalake-dev-857854758128/gold/mdp_gold_dev/fact_orders/'
 ) }}
 
 with order_item_aggregates as (

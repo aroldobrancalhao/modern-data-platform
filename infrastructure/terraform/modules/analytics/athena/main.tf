@@ -4,7 +4,7 @@ resource "aws_athena_workgroup" "this" {
 
   configuration {
 
-    enforce_workgroup_configuration = true
+    enforce_workgroup_configuration = var.enforce_output_location
 
     publish_cloudwatch_metrics_enabled = true
 

@@ -11,8 +11,22 @@
 -- materialized='table': final-layer dim/fact benefit from physical
 -- materialization, unlike stg_/int_ which stay view by staging
 -- convention.
+--
+-- external_location is explicit: the workgroup (mdp-athena-dev) has
+-- enforce_workgroup_configuration=true with a fixed output location,
+-- which makes dbt-athena ignore s3_data_dir/s3_data_naming
+-- (schema_table) for CTAS tables -- confirmed in the adapter's
+-- generate_s3_location() source: it never checks workgroup
+-- enforcement when external_location is set, only when falling back
+-- to s3_data_dir/s3_staging_dir. Path below mirrors the schema_table
+-- naming already declared in profiles.yml (s3_data_dir/{schema}/
+-- {table}/), made explicit since the implicit computation is a no-op
+-- under this workgroup config.
 
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    external_location='s3://mdp-datalake-dev-857854758128/gold/mdp_gold_dev/dim_customers/'
+) }}
 
 select
     customer_id,

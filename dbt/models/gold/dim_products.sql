@@ -12,8 +12,15 @@
 -- materialized='table': final-layer dim/fact benefit from physical
 -- materialization, unlike stg_/int_ which stay view by staging
 -- convention.
+--
+-- external_location is explicit: see dim_customers.sql for why
+-- (workgroup enforce_workgroup_configuration neutralizes s3_data_dir/
+-- s3_data_naming for CTAS tables unless external_location is set).
 
-{{ config(materialized='table') }}
+{{ config(
+    materialized='table',
+    external_location='s3://mdp-datalake-dev-857854758128/gold/mdp_gold_dev/dim_products/'
+) }}
 
 select
     p.product_id,

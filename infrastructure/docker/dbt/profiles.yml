@@ -3,11 +3,27 @@ modern_data_platform:
   outputs:
     dev:
       type: athena
-      s3_staging_dir: s3://mdp-datalake-dev-857854758128/athena/
+      # Fixed alongside the Metabase/Power BI IAM investigation (see
+      # docs/architecture/roadmap-next-steps.md): this file has a
+      # single consumer (marketplace_batch_pipeline's `dbt run`/
+      # `dbt test --select gold`, no --target flag), unlike
+      # ~/.dbt/profiles.yml on a dev machine (which also keeps a
+      # `dev` target for ad-hoc querying against mdp-athena-dev). So,
+      # unlike that file, there's no need for a second `dbt_build`
+      # target here -- this one target just points directly at the
+      # dbt-safe workgroup.
+      #
+      # work_group: mdp-athena-dbt-dev (not mdp-athena-dev) --
+      # enforce_output_location=false there is what lets dbt-athena's
+      # external_location config actually reach the generated CTAS
+      # DDL (mdp-athena-dev enforces its own output location, which
+      # makes the adapter drop that clause for Hive tables regardless
+      # of config -- see dbt/models/gold/dim_customers.sql).
+      s3_staging_dir: s3://mdp-athena-staging-dev-857854758128/dbt-build/
       s3_data_dir: s3://mdp-datalake-dev-857854758128/gold/
       s3_data_naming: schema_table
       region_name: sa-east-1
-      work_group: mdp-athena-dev
+      work_group: mdp-athena-dbt-dev
       database: awsdatacatalog
       schema: mdp_silver_dev
       threads: 4
