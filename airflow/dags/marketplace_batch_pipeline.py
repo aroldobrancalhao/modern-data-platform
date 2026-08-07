@@ -41,9 +41,14 @@ Each task's success is verified for real, not just "did not raise":
 - dbt_test_gold is itself the real verification for the Gold layer --
   a non-zero exit fails the task, exactly like running it manually.
 
-schedule=None: manual trigger only, until a full run has been
-validated end to end (see project-decisions.md / roadmap-next-steps.md
-for when this becomes scheduled).
+schedule=timedelta(minutes=30): validated end to end this session
+(real Postgres -> Databricks Full Pipeline -> dbt run/test --select
+gold, including a root-cause fix for a Bronze/Silver duplicate-row bug
+found along the way -- see docs/architecture/roadmap-next-steps.md),
+satisfying the condition this docstring itself used to name for moving
+off schedule=None. catchup=False (unchanged) means the first scheduler
+restart after this change runs only from that point forward, not once
+per missed interval since start_date.
 
 Author: Modern Data Platform
 License: MIT
@@ -54,7 +59,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +87,7 @@ DBT_PROJECT_DIR = "/opt/mdp/dbt"
 
 @dag(
     dag_id="marketplace_batch_pipeline",
-    schedule=None,
+    schedule=timedelta(minutes=30),
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["batch", "pipeline"],
