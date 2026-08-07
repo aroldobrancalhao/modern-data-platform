@@ -566,7 +566,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 
 ## Phase 5 — Analytics
 
-- 🔶 Dashboards -- Metabase (containerized, `infrastructure/docker/docker-compose.yml`) connected to Gold over Athena end to end. Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`) scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated staging bucket -- not `terraform-admin`. First real dashboard built via the Metabase API (Native Query/SQL, not the visual builder, so it stays versionable): **[Gold Layer Overview](dashboards/metabase/README.md)** -- total orders, orders by month, top products by revenue, top sellers by order count, average order value; SQL sources and data-cardinality caveats in `dashboards/metabase/`. Power BI (external, local/gateway) documented but not connected yet.
+- 🔶 Dashboards -- Metabase (containerized, `infrastructure/docker/docker-compose.yml`) connected to Gold over Athena end to end. Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`) scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated staging bucket -- not `terraform-admin`. First real dashboard built via the Metabase API (Native Query/SQL, not the visual builder, so it stays versionable): **[Gold Layer Overview](dashboards/metabase/README.md)** -- total orders, orders by day, top products by revenue, top sellers by order count, average order value; SQL sources and data-cardinality caveats in `dashboards/metabase/`. Power BI (external, local/gateway) documented but not connected yet.
 - ⬜ Business KPIs
 
 ## Phase 6 — Observability

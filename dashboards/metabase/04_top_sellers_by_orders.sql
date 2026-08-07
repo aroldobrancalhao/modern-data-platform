@@ -13,6 +13,10 @@
 -- count(distinct order_id), not count(*): a single order can contain
 -- multiple line items from the same seller, which would otherwise
 -- inflate this past the real number of distinct orders reached.
+--
+-- limit 10 (was 15): same readability reasoning as
+-- 03_top_products_by_revenue.sql -- a "row" (horizontal bar) chart
+-- keeps every label legible at 10.
 
 select
     seller_id,
@@ -21,4 +25,4 @@ select
 from int_order_items_enriched
 group by seller_id, seller_name
 order by total_orders desc
-limit 15
+limit 10

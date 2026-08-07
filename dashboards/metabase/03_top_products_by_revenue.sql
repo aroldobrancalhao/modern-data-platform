@@ -7,6 +7,11 @@
 -- average) -- real reuse, real revenue variation (top product here is
 -- ~3M vs a long tail), unlike the customer/product 1:1 pattern this
 -- directory's README calls out elsewhere.
+--
+-- limit 10 (was 15): a "row" (horizontal bar) chart with 15 category
+-- labels this long (product names) got cramped -- 10 keeps every
+-- label legible without cutting into the real variation the top of
+-- this ranking shows.
 
 select
     product_id,
@@ -16,4 +21,4 @@ select
 from int_order_items_enriched
 group by product_id, product_name
 order by revenue desc
-limit 15
+limit 10
