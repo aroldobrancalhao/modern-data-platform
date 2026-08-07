@@ -121,27 +121,45 @@ that leave no diff). Confirmed by reading each setting back
   screenshot the rendered chart.
 - **`column_title`** (per-column, inside the same `column_settings`
   entries): set on every displayed column across all 5 cards (e.g.
-  `total_orders` → "Total de Pedidos", `product_name` → "Produto").
-  Same caveat as above — persisted, not visually confirmed.
+  `total_orders` → "Pedidos", `product_name` → "Produto"). Same
+  caveat as above — persisted, not visually confirmed.
+- **Chart axis titles are a *different* setting from `column_title`**:
+  found live -- setting `column_title` alone left the chart axes
+  showing raw column names (`total_orders`, `product_name`, ...).
+  `column_title` renames a column for tables/tooltips; the actual
+  axis label on a bar/row chart is `graph.x_axis.title_text`/
+  `graph.y_axis.title_text` (top-level `visualization_settings` keys,
+  not nested under `column_settings`). Set on cards 41/42/43 (e.g.
+  card 41: x-axis "Dia", y-axis "Pedidos"); confirmed both settings
+  persist and every card still executes.
 - **Horizontal bars for cards 42/43**: used `display: "row"`, a
   distinct Metabase chart type for horizontal bars — not a
   `graph.orientation` setting on `display: "bar"` (that setting either
   doesn't exist in this version's schema or isn't the documented
   mechanism; `row` is). Confirmed each card still executes correctly
   under the new display type (`POST /api/card/:id/query`).
-- **Instance color palette (`application-colors` setting)**:
-  confirmed the setting key exists (`GET /api/setting`), but `PUT
-  /api/setting/application-colors` returned a real `500` with an
-  explicit reason: *"Setting application-colors is not enabled
-  because feature :whitelabel is not available"*. This is a
-  Pro/Enterprise-gated feature (whitelabeling), not merely
-  API-restricted — the Admin → Appearance color pickers in the UI are
-  almost certainly gated behind the same feature flag on this
-  open-source install, so this is likely **not achievable at all**
-  on this edition, not just "needs the UI instead of the API".
-  **Not simulated or worked around** — reported as-is, per this
-  project's convention of not gambiarra-ing around a real permission
-  boundary.
+- **Instance color palette (`application-colors` setting) — confirmed
+  genuinely unavailable, not just API-restricted**: `PUT
+  /api/setting/application-colors` returned a real `500` both times it
+  was tried, with an explicit reason: *"Setting application-colors is
+  not enabled because feature :whitelabel is not available"*. Checked
+  further before giving up on it: `GET /api/setting/token-features`
+  shows every single premium flag as `false` (`whitelabel: false`,
+  `serialization: false`, `embedding: false`, ~60 others, all `false`)
+  and `enable-whitelabeling?: false` -- this instance has **no license
+  token at all**, not a specific restriction on this one setting. The
+  Admin → Appearance page's color pickers (Settings gear icon → Admin
+  settings → Appearance → "User interface colors" / "Chart colors")
+  are almost certainly gated behind the same `:whitelabel` check in
+  the UI too, so this is likely not achievable by clicking through the
+  UI either on this open-source install -- not merely "needs a human
+  instead of the API". **Not simulated or worked around** — reported
+  as-is, per this project's convention of not gambiarra-ing around a
+  real permission boundary. If this becomes a real requirement later,
+  the actual options are a paid Metabase plan, or per-chart
+  `series_settings.<key>.color` overrides (a different, narrower
+  mechanism -- colors one question's series at a time, not an
+  instance-wide theme -- and wasn't asked for here).
 - **Dashboard layout** (`PUT /api/dashboard/:id`, `dashcards` array):
   reorganized into the layout described above. Assumed a 24-unit-wide
   grid (common in recent Metabase versions) to place the two `row`
