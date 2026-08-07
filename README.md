@@ -92,9 +92,9 @@ More details are available in the Architecture Decision Records (ADRs).
                                    │
                                    ▼
                             Amazon Athena
-                                   │
-                                   ▼
-                              Power BI
+                          ┌────────┴─────────┐
+                          ▼                  ▼
+                       Metabase           Power BI
 ```
 
 Databricks/Spark's responsibility ends at Silver; Gold is dbt's
@@ -120,7 +120,7 @@ ADR-011).
 | Table Format | Delta Lake |
 | Data Modeling | dbt |
 | Query Engine | Amazon Athena |
-| Visualization | Power BI |
+| Visualization | Metabase (containerized), Power BI |
 | Infrastructure as Code | Terraform |
 | Containers | Docker |
 | Version Control | GitHub |
@@ -546,13 +546,14 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 - ✅ Debezium (connector running, capturing all `marketplace` tables)
 - ✅ Kafka (broker up, topics created on first captured change)
 - ✅ Bronze Consumer: continuous Kafka consumer streaming Debezium CDC events straight into Bronze Delta tables via `deltalake` (no Spark), independent from Airflow (see ADR-0008), validated end to end against real Postgres/Debezium/Kafka (`-m real_kafka`)
-- ✅ Real Airflow DAG (`marketplace_batch_pipeline`, Airflow 3.3.0) orchestrating the pipeline end to end -- Postgres extraction (7 entities) -> Databricks `full_pipeline` -> `dbt run`/`dbt test --select gold`, validated with a real manual trigger against real Postgres/S3/Databricks/Athena
+- ✅ Real Airflow DAG (`marketplace_batch_pipeline`, Airflow 3.3.0) orchestrating the pipeline end to end -- Postgres extraction (7 entities) -> Databricks `full_pipeline` -> `dbt run`/`dbt test --select gold`, validated with a real manual trigger against real Postgres/S3/Databricks/Athena. Scheduled every 30 minutes (`schedule=timedelta(minutes=30)`, was `schedule=None` pending this exact validation) as of this session.
 
 ## Phase 3 — Data Lake
 
 - ✅ Postgres extraction → `raw/` → Bronze → Silver, validated end to end against real Postgres/S3/Databricks for 7 entities (customers, orders, order_items, products, payments, sellers, categories)
 - ✅ Silver registered in the Glue Catalog (`SilverCatalogRegistrationStage`)
 - Gold is no longer a Spark/Databricks stage here -- moved to dbt (see ADR-011 and Phase 4)
+- ✅ Bronze split into two physical tables: `bronze/{entity}` (streaming, `bronze_consumer.py`, Kafka/Debezium, all 16 entities) and `bronze_batch/{entity}` (batch, `ingest_sources.ipynb`/`validate_bronze.ipynb`/`optimize_bronze.ipynb`/`transform_silver.ipynb`, the 7 dbt/Gold entities) -- `StorageConfig.bronze_batch()`. Both used to share one path, which let the streaming consumer's continuous `append`s and the batch flow's periodic `overwrite`s land inconsistent row versions in Silver for any entity that receives an update (found live: 139 duplicate `product_id` rows in `stg_products`, root-caused all the way to Postgres, Bronze's real `_delta_log` history, and the Debezium decoder before fixing). Validated live: real "Full Pipeline" run + `dbt test --select gold` **28/28 passing** (was 24/28). See `docs/architecture/roadmap-next-steps.md`.
 - ✅ Postgres extraction parallelized: `Pipeline` (`data_platform/processing/core/pipeline.py`) gained `StageGroup` -- a nested `tuple[Stage, ...]` inside `Pipeline.stages` is a group of Stages that run concurrently via `asyncio.gather`; groups still execute in sequence relative to each other. A new `ParallelExecutor(BaseExecutor)` (`data_platform/processing/executor/parallel_executor.py`) runs them; `SequentialExecutor` needed no changes at all -- flat iteration (`for stage in pipeline`) auto-flattens groups, so it still runs every stage one at a time, in order, exactly as before. `ExecutionRuntime`'s per-stage state (current stage/attempt, last result, last exception) moved from single `ProcessingContext` keys to `contextvars.ContextVar` -- each concurrent stage's own `asyncio.Task` gets an isolated copy, so two stages in the same group can no longer race on shared state the way the old single-slot design did. `StageResult` gained an `output: dict[str, Any]` field so a Stage can return its own result directly (e.g. `PostgresExtractionStage`'s landed `uri`/`bucket`/`object_key`) instead of publishing it into the shared `ProcessingContext` via a `ContextWriter`, which would collide the same way under real concurrency. `extract_postgres`'s 7 entities now run as a single parallel group (previously 7 separate sequential `Pipeline` runs) -- validated live: 45.0s → 32.2s (~1.4x), more modest than the ~2.46x theoretical estimate, since Python's GIL limits how much of the CPU-bound part (Arrow table construction, Parquet serialization) actually overlaps inside `asyncio.to_thread()` -- only the real I/O (the Postgres query, the S3 upload) genuinely does. `PostgresExtractionStage.execute()` itself needed that `asyncio.to_thread()` wrapper added: psycopg/boto3 are blocking clients, so without it the coroutine had no real `await` point for `asyncio.gather()` to interleave at, and the first live validation ran the 7 stages one at a time regardless (71s, worse than sequential) -- caught only by measuring the real run, not by the design or the unit tests (see commit `1f3002b`).
 
 ## Phase 4 — Data Modeling
@@ -560,11 +561,12 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 - ✅ dbt project scaffolded (`dbt/`), real connection to Athena/Glue confirmed (`dbt debug`)
 - ✅ Silver sources declared for all 7 entities; `stg_*` staging models implemented and tested against real Athena data for all 7
 - ✅ `int_`/`dim_`/`fact_` Gold models: `int_order_items_enriched`, `dim_customers`, `dim_products`, `fact_orders` (star schema, table-materialized, `fact_orders` partitioned by `order_year`/`order_month`) -- `dbt run`/`dbt test` both green against real Athena
+- ✅ Gold `table`-materialized models land under a real, predictable `gold/{schema}/{table}/` S3 path (`external_location`, set explicitly per model) via a dedicated Athena workgroup for dbt builds (`mdp-athena-dbt-dev`, `enforce_output_location=false`), separate from the ad-hoc/BI workgroup (`mdp-athena-dev`, untouched). Found live: `mdp-athena-dev`'s `enforce_workgroup_configuration=true` makes dbt-athena's CTAS macro drop any location clause for Hive tables regardless of `external_location`/`s3_data_dir` config -- Gold tables were silently landing under a random `{uuid}` path instead. See `docs/architecture/roadmap-next-steps.md`.
 - ⬜ Metrics layer
 
 ## Phase 5 — Analytics
 
-- ⬜ Dashboards
+- 🔶 Dashboards -- Metabase (containerized, `infrastructure/docker/docker-compose.yml`) connected to Gold over Athena end to end: real `POST /api/database` + schema sync + a real query against `fact_orders`, all validated live. Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`) scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated staging bucket -- not `terraform-admin`. No actual dashboard/chart built yet, just the data source. Power BI (external, local/gateway) documented but not connected yet.
 - ⬜ Business KPIs
 
 ## Phase 6 — Observability

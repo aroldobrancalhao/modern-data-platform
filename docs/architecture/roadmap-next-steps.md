@@ -8,24 +8,59 @@ isn't lost between sessions. Entries are removed once implemented.
 
 ---
 
-## dbt-athena `s3_data_naming = schema_table` has no atomic swap on rebuild
+## Gold CTAS tables now really land under `gold/{schema}/{table}/` -- the "no atomic swap on rebuild" risk below is live, not theoretical
 
-`dbt/`'s Athena profile uses `s3_data_naming: schema_table` (fixed path
-per table, `gold/{schema}/{table}/`) rather than one of the `_unique`
-variants. This means a rebuild (`dbt run --full-refresh`, or any
-`table` materialization) overwrites the same S3 location in place --
-no atomic table-location swap, so a concurrent reader could see
-inconsistent data mid-rebuild. Accepted deliberately for now: matches
-the same overwrite-in-place model already used on the Spark side
-(`write_delta(..., mode="overwrite")`), and nothing in this pipeline
-today has a concurrent-read requirement during a rebuild window.
+This entry originally described `s3_data_naming: schema_table` as an
+accepted, deliberate trade-off. It turned out to describe a
+configuration that was never actually taking effect -- found while
+investigating a Metabase BI Reader IAM connection (Sprint 12): Gold's
+`table`-materialized models were silently landing under
+`{s3_staging_dir}/tables/{uuid}/` (dbt-athena's bare fallback), not
+`gold/{schema}/{table}/` at all.
 
-**Revisit if**: a concurrent consumer sensitive to mid-rebuild
-inconsistency shows up -- e.g. a scheduled Power BI refresh querying
-Gold while a `dbt run` is in flight. At that point, switch to
-`schema_table_unique` (atomic swap, per dbt-athena's docs), accepting
-its trade-off of orphaned S3 directories from old rebuilds needing
-periodic cleanup.
+**Root cause**: `mdp-athena-dev`'s `enforce_workgroup_configuration=
+true` makes dbt-athena's `create_table_as.sql` macro drop the
+`external_location`/computed-location clause from the generated CTAS
+DDL entirely for Hive tables (`{%- if not
+work_group_output_location_enforced or table_type == 'iceberg' -%}`),
+regardless of `s3_data_dir`/`s3_data_naming`/`external_location`
+config -- confirmed by reading the installed adapter source
+(`dbt-athena==1.11.0`), not by trusting a docs summary (an earlier
+attempt at this same investigation trusted a WebFetch summary claiming
+`generate_s3_location()` bypassed workgroup enforcement -- it doesn't;
+the macro drops the clause before that function's result is even used).
+
+**Fix applied**: a dedicated workgroup, `mdp-athena-dbt-dev`
+(Terraform: `module.athena_dbt_build`, `environments/dev/analytics.tf`
+-- `modules/analytics/athena` gained an `enforce_output_location`
+variable, default `true`, so `mdp-athena-dev` itself -- the one
+Metabase/Power BI query against -- is untouched), with
+`enforce_output_location=false`. dbt's `dbt_build` target
+(`~/.dbt/profiles.yml` and `infrastructure/docker/dbt/profiles.yml`,
+the latter mounted into the Airflow containers -- also found stale and
+fixed) points there. `dim_customers`/`dim_products`/`fact_orders`
+(`dbt/models/gold/*.sql`) each set `external_location` explicitly.
+Confirmed via the real DDL (`aws athena get-query-execution`), not
+just a clean exit code: `external_location='s3://.../gold/mdp_gold_dev/
+fact_orders'` now genuinely appears in the `WITH (...)` clause.
+
+**Consequence -- the original risk this entry named is now real,
+not accepted-but-dormant**: before this fix, every
+`dbt run --full-refresh` picked a fresh random `{uuid}` path, which
+accidentally behaved like an atomic swap (old and new data never
+shared a location). Now that the location is fixed
+(`gold/{schema}/{table}/`), a rebuild genuinely overwrites in place
+again -- the original trade-off (matching Spark's own
+`mode="overwrite"`) is back in force, and unlike when this was first
+written, there's now a real concurrent reader: Metabase, validated end
+to end against this exact Gold layer (`POST /api/dataset` against
+`fact_orders`, real data returned). The original **"Revisit if": a
+concurrent consumer sensitive to mid-rebuild inconsistency shows up**
+condition has been met. Not switched to `schema_table_unique` yet --
+recorded here so it isn't lost, not fixed unprompted (a scheduling/
+availability trade-off, not a bug, and now that `mdp-athena-dbt-dev`
+is a dedicated workgroup, a bad rebuild can no longer affect anything
+sharing infrastructure with the BI-facing workgroup either way).
 
 ## `src/` top-level module structure has no single source of truth
 
@@ -109,6 +144,31 @@ containers' `src:/opt/mdp/src` volume mount (see
 `docs/environment-inventory.md`) relies on the current flat-path
 behavior before changing it.
 
+## `marketplace_batch_pipeline` moved off `schedule=None` -- decision record
+
+The DAG's own docstring named the condition for this explicitly:
+"manual trigger only, until a full run has been validated end to end."
+That happened this session -- a real Postgres extraction, a real
+Databricks "Full Pipeline" run, and `dbt run`/`dbt test --select gold`
+all green (28/28), including the Gold-location and Bronze
+batch/streaming fixes above landing along the way. Moved to
+`schedule=timedelta(minutes=30)`, `catchup=False` unchanged (no
+retroactive runs on first deploy). No prior cron/`timedelta` precedent
+existed elsewhere in `airflow/dags/` to follow -- picked `timedelta`
+for a plain fixed interval over an equivalent cron string
+(`*/30 * * * *`) for readability; `retry_validation.py` already
+imports `timedelta` for an unrelated purpose, a mild precedent.
+Unpaused and confirmed live (`airflow dags details`: `is_paused:
+False`, a real computed `next_dagrun_run_after`) -- not left as a
+schedule nobody actually enabled.
+
+**Not addressed by this change**: `infrastructure/docker/dbt/
+profiles.yml` (mounted into the Airflow containers) still needed its
+own copy of the `mdp-athena-dbt-dev` workgroup fix from the entry
+above -- found stale (still pointing at the old `mdp-athena-dev`/old
+staging path) exactly because this DAG was about to start running for
+real; fixed alongside it, not a separate follow-up.
+
 ## Fraud Detection (Sprint 15) deferred to v2
 
 Sprint 15 in `project-decisions.md`'s Roadmap names "Fraud Detection",
@@ -145,6 +205,120 @@ and `airflow/config/bootstrap/airflow.py`). The correct long-term fix
 is wiring that output through the same pipeline so this value is
 derived from Terraform state instead of copy-pasted; not done here,
 kept as a manually-maintained value for now.
+
+## Bronze's batch and streaming writers shared one physical Delta table -- root cause of a real Silver duplicate-row bug, now split
+
+Found live investigating a `unique_dim_products_product_id` test
+failure (139 duplicate `product_id` rows) that surfaced once the Gold
+CTAS location bug above was fixed and `dbt test` actually ran against
+current data for the first time in a while. Traced layer by layer, not
+assumed:
+
+- **Postgres (source)**: clean -- `137207 = 137207` distinct
+  `product_id` (`GROUP BY ... HAVING count(*) > 1` returned nothing).
+  Not the simulator.
+- **The duplicate pairs, compared column by column**: identical except
+  `category_id` -- same `updated_at`, same Silver `processed_at`.
+  Confirmed against real Postgres: the *current* `category_id` matches
+  one of the two Silver rows, carrying the exact same `updated_at`
+  both already had. `products.category_id` can apparently change at
+  the source without `updated_at` being bumped -- an application/
+  simulator gap on its own, not yet a pipeline bug.
+- **Why `_remove_duplicates()` (`data_platform/processing/silver/
+  transformations.py`) didn't catch it**: it isn't broken -- `dropDuplicates()`
+  (all columns) only removes byte-identical rows, and these weren't
+  identical.
+- **Where the two versions actually came from**: `bronze/products/
+  _delta_log/` was at version **2644**, `mode: Append` every ~15s --
+  `bronze_consumer.py` (streaming, Kafka/Debezium, all 16 entities),
+  whose own docstring already said it lands events "straight into the
+  same Bronze Delta tables the batch flow writes." `ingest_sources.ipynb`
+  (batch, the 7 dbt/Gold entities) writes that *same* `bronze/{entity}/`
+  path with `mode="overwrite"`. Both by design, no reconciliation
+  between them: a batch overwrite gives one clean snapshot; the
+  streaming consumer appends real CDC events on top before the next
+  Silver run reads it. Silver's own `_delta_log` (checked directly)
+  confirmed a clean `Overwrite`/`REMOVE`+`ADD` per run -- the
+  inconsistency was already inside Bronze by the time Silver ran.
+- **Scope check**: `customers`, `orders`, `order_items`, `sellers`,
+  `categories`, `payments` all showed `count(*) = count(distinct
+  <key>)` -- zero duplicates. Specific to `products`, apparently the
+  only one of the 7 that receives an in-place update from the
+  simulator today.
+- **No usable ordering signal exists to resolve this from inside
+  Silver instead**: `decode_debezium_message()`/`_buffer_message()`
+  (`integrations/kafka/messaging/debezium_envelope.py`,
+  `bronze_consumer.py`) never extract or persist Debezium's `op`,
+  `ts_ms`, or `source.lsn` -- only the business `after`/`before`
+  fields reach Bronze. `updated_at` is proven unreliable (this exact
+  bug). Two alternatives were considered and rejected in favor of the
+  fix below: real CDC/extraction provenance timestamps (correct
+  long-term, touches Bronze schema for every entity, needs a
+  historical-data decision -- see Future Improvements) and ordering by
+  Delta file/commit metadata (fragile -- `OPTIMIZE`/compaction can
+  reorder files without changing logical recency).
+
+**Fix applied**: `StorageConfig` (`data_platform/storage/config.py`)
+gained `.bronze_batch(entity)` (`bronze_batch/{entity}`), separate
+from `.bronze(entity)` (now documented as streaming-only).
+`ingest_sources.ipynb`, `validate_bronze.ipynb`, `optimize_bronze.ipynb`
+(the Databricks "Full Pipeline" Job) and `transform_silver.ipynb` all
+read/write `.bronze_batch()` instead; `bronze_consumer.py` untouched,
+still writes `.bronze()`. Validated live: real "Full Pipeline" run
+(`bronze -> bronze_validate -> bronze_optimize -> silver`, 7 entities)
+against the real workspace, Silver `products` back to `137207 =
+137207`, `dbt run --full-refresh --target dbt_build --select gold` +
+`dbt test` **28/28 passing** (was 24/28).
+
+**Future Improvement, not urgent**: real CDC/extraction provenance
+(Debezium's `source.ts_ms`, or a `PostgresExtractionStage`-stamped
+`_extracted_at`) plus a generic "latest per natural key" step in
+`apply_standard_transformations`, for whenever an entity legitimately
+needs updates from multiple sources reconciled. Not needed today --
+splitting the write paths removed the actual conflict at its root, for
+every entity, not just `products`.
+
+## `bronze_path` Airflow Variable is set but never read
+
+`airflow/config/bootstrap/airflow.py` sets an Airflow Variable
+`bronze_path: "bronze/"`, but nothing in the codebase reads it
+(confirmed via a full-repo grep) -- not a functional bug today (zero
+consumers means it can't silently point anyone at the wrong path), but
+worth knowing before ever wiring a new consumer to it: `"bronze/"` is
+the *streaming* Bronze path (see the entry above) -- a future reader
+expecting this Variable to describe the batch/dbt Gold pipeline's
+Bronze would get the wrong one. Not fixed now -- no real consumer to
+fix a value for yet.
+
+## Airflow's AWS credentials in `infrastructure/docker/.env` are a personal-key copy, not scoped
+
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `infrastructure/docker/.env`
+(used by the Airflow `aws_default` Connection) are, per the comment
+already on those lines, a direct copy of the `~/.aws/credentials
+[default]` profile (`terraform-admin` -- confirmed via `aws sts
+get-caller-identity`) -- the same full-access key used for every
+manual `aws`/`dbt` command on this machine, not an identity scoped to
+what Airflow's DAG tasks actually touch (Postgres extraction to S3,
+Glue registration).
+
+Found while investigating IAM for the BI Reader identity (Sprint 12,
+Metabase/Power BI): `mdp-bi-reader-dev` (`module.bi_reader`,
+`environments/dev/security.tf`) is the first credential in this
+project scoped to only what its consumer needs (Athena workgroup +
+`mdp_gold_dev` + `gold/`/`athena/` S3 prefixes) -- Airflow's own
+credential predates that pattern and was never revisited against it.
+
+**Not fixed now**: out of scope for the BI integration work that
+surfaced it. Fixing it means defining what Airflow's tasks actually
+need (S3 `bronze/`/`silver/`/`checkpoints/`, Glue bronze/silver
+registration -- not gold, not IAM/Terraform-admin actions), creating a
+dedicated IAM User (or role, if Airflow ever runs on infrastructure
+that can assume one) scoped to exactly that, then rotating
+`infrastructure/docker/.env` to the new key.
+
+**Revisit**: next time IAM/credentials in this project get touched, or
+before this project's AWS usage moves beyond a single local dev
+machine.
 
 ## `airflow tasks test` does not exercise the real worker/remote-log path
 
