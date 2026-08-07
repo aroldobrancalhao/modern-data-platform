@@ -8,6 +8,21 @@
 -- stg_order_items regardless; the relationships tests in schema.yml
 -- are what should catch any future orphan, not a silently
 -- row-dropping inner join.
+--
+-- materialized='table' (was 'view'): found live querying this model
+-- from Metabase -- as a view, Athena has to resolve stg_order_items/
+-- stg_orders/stg_products/stg_sellers/stg_categories at query time,
+-- which live in mdp_silver_dev, outside the BI Reader IAM policy's
+-- scope (Gold only, deliberately -- see docs/architecture/
+-- roadmap-next-steps.md). Materializing as a table removes the
+-- runtime dependency on Silver entirely, matching dim_customers/
+-- dim_products/fact_orders. external_location explicit for the same
+-- reason as those three (see dim_customers.sql).
+
+{{ config(
+    materialized='table',
+    external_location='s3://mdp-datalake-dev-857854758128/gold/mdp_gold_dev/int_order_items_enriched/'
+) }}
 
 select
     oi.order_item_id,
