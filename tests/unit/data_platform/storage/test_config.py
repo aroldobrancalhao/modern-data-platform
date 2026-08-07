@@ -22,6 +22,15 @@ def test_bronze_returns_the_bronze_layer_uri() -> None:
     )
 
 
+def test_bronze_batch_returns_a_separate_uri_from_bronze() -> None:
+    assert StorageConfig.bronze_batch("customers") == (
+        "s3://mdp-datalake-dev-857854758128/bronze_batch/customers"
+    )
+    assert StorageConfig.bronze_batch("customers") != StorageConfig.bronze(
+        "customers"
+    )
+
+
 def test_silver_returns_the_silver_layer_uri() -> None:
     assert StorageConfig.silver("customers") == (
         "s3://mdp-datalake-dev-857854758128/silver/customers"

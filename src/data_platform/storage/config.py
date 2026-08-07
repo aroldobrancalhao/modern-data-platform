@@ -44,7 +44,36 @@ class StorageConfig:
 
     @classmethod
     def bronze(cls, entity: str) -> str:
+        """
+        The streaming Bronze Consumer's table (``bronze_consumer.py``,
+        Kafka/Debezium CDC, append-only, all 16 marketplace entities).
+
+        Not read by the batch flow (``ingest_sources.ipynb`` and
+        downstream) as of this method's introduction -- see
+        ``.bronze_batch()``. The two used to share this same path,
+        which produced real duplicate/inconsistent rows in Silver for
+        entities that receive updates (found investigating a
+        ``dim_products`` uniqueness failure -- batch's ``overwrite``
+        and streaming's continuous ``append`` raced on the same Delta
+        table with no reconciliation between them). See
+        docs/architecture/roadmap-next-steps.md.
+        """
         return cls._uri("bronze", entity)
+
+    @classmethod
+    def bronze_batch(cls, entity: str) -> str:
+        """
+        The batch flow's own Bronze table (``ingest_sources.ipynb``,
+        ``validate_bronze.ipynb``, ``optimize_bronze.ipynb``,
+        ``transform_silver.ipynb`` -- the Databricks "Full Pipeline"
+        Job, the 7 entities the dbt/Gold star schema depends on),
+        separate from ``.bronze()`` (streaming). Both are
+        ``mode="overwrite"`` per run, so this path only ever holds one
+        logical snapshot at a time, sourced solely from the most
+        recent ``PostgresExtractionStage`` extraction -- no
+        interference from Kafka/Debezium's independent append stream.
+        """
+        return cls._uri("bronze_batch", entity)
 
     @classmethod
     def silver(cls, entity: str) -> str:
