@@ -381,18 +381,6 @@ needs updates from multiple sources reconciled. Not needed today --
 splitting the write paths removed the actual conflict at its root, for
 every entity, not just `products`.
 
-## `bronze_path` Airflow Variable is set but never read
-
-`airflow/config/bootstrap/airflow.py` sets an Airflow Variable
-`bronze_path: "bronze/"`, but nothing in the codebase reads it
-(confirmed via a full-repo grep) -- not a functional bug today (zero
-consumers means it can't silently point anyone at the wrong path), but
-worth knowing before ever wiring a new consumer to it: `"bronze/"` is
-the *streaming* Bronze path (see the entry above) -- a future reader
-expecting this Variable to describe the batch/dbt Gold pipeline's
-Bronze would get the wrong one. Not fixed now -- no real consumer to
-fix a value for yet.
-
 ## Airflow's AWS credentials in `infrastructure/docker/.env` are a personal-key copy, not scoped
 
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `infrastructure/docker/.env`

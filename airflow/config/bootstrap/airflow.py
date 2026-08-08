@@ -81,13 +81,6 @@ class AirflowManager:
             "silver_database": outputs["silver_database"],
             "gold_database": outputs["gold_database"],
             "athena_workgroup": outputs["athena_workgroup"],
-            "bronze_path": "bronze/",
-            "silver_path": "silver/",
-            "gold_path": "gold/",
-            "schemas_path": "schemas/",
-            "logs_path": "logs/",
-            "tmp_path": "tmp/",
-            "checkpoints_path": "checkpoints/",
         }
 
         for key, value in variables.items():
