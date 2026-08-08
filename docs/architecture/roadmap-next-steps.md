@@ -381,35 +381,87 @@ needs updates from multiple sources reconciled. Not needed today --
 splitting the write paths removed the actual conflict at its root, for
 every entity, not just `products`.
 
-## Airflow's AWS credentials in `infrastructure/docker/.env` are a personal-key copy, not scoped
+## Airflow's AWS credentials -- partially scoped this session, dbt and bronze-consumer still on the personal key
 
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `infrastructure/docker/.env`
-(used by the Airflow `aws_default` Connection) are, per the comment
-already on those lines, a direct copy of the `~/.aws/credentials
-[default]` profile (`terraform-admin` -- confirmed via `aws sts
-get-caller-identity`) -- the same full-access key used for every
-manual `aws`/`dbt` command on this machine, not an identity scoped to
-what Airflow's DAG tasks actually touch (Postgres extraction to S3,
-Glue registration).
+used to be a direct copy of the `~/.aws/credentials [default]` profile
+(`terraform-admin`) -- the same full-access key used for every manual
+`aws`/`dbt` command on this machine, not an identity scoped to what
+Airflow's DAG tasks actually touch. Investigated for real this
+session (read `marketplace_batch_pipeline.py`, `postgres_extraction_
+stage.py`, `dbt/profiles.yml`, `aws_context.py` -- not assumed) rather
+than picking up the "S3 bronze/silver, Glue bronze/silver" scope this
+entry originally guessed at.
 
-Found while investigating IAM for the BI Reader identity (Sprint 12,
-Metabase/Power BI): `mdp-bi-reader-dev` (`module.bi_reader`,
-`environments/dev/security.tf`) is the first credential in this
-project scoped to only what its consumer needs (Athena workgroup +
-`mdp_gold_dev` + `gold/`/`athena/` S3 prefixes) -- Airflow's own
-credential predates that pattern and was never revisited against it.
+**What Airflow's own credential actually does, confirmed live**:
+1. `extract_postgres` -- S3 `raw/` read/write/list/delete (7
+   entities), via `AwsContext`'s boto3 default-credential-chain
+   (no Connection object involved).
+2. CloudWatch remote task logging -- via the `aws_default` Connection,
+   `AirflowManager._build_connections`.
+3. `dbt_run_gold`/`dbt_test_gold` (`BashOperator`, real `dbt` CLI) --
+   needs real write access to Athena (`mdp-athena-dbt-dev` workgroup),
+   Glue (read `mdp_silver_dev`, write `mdp_gold_dev`), and S3 (read
+   `silver/`, write `gold/`) to build Gold -- `dbt/models/gold/*.sql`
+   `ref()` the `stg_*` Silver models directly, so this is a real
+   dependency, not a guess.
 
-**Not fixed now**: out of scope for the BI integration work that
-surfaced it. Fixing it means defining what Airflow's tasks actually
-need (S3 `bronze/`/`silver/`/`checkpoints/`, Glue bronze/silver
-registration -- not gold, not IAM/Terraform-admin actions), creating a
-dedicated IAM User (or role, if Airflow ever runs on infrastructure
-that can assume one) scoped to exactly that, then rotating
-`infrastructure/docker/.env` to the new key.
+**Fixed this session (Terraform `module.airflow_ingest`,
+`environments/dev/security.tf`)**: a dedicated IAM User,
+`mdp-airflow-ingest-dev`, scoped to exactly items 1-2 above -- S3
+`raw/*` read-write-list-delete, and `CreateLogGroup`/`CreateLogStream`/
+`DescribeLogStreams`/`PutLogEvents`/`GetLogEvents` on the Airflow
+CloudWatch log group only. **Deliberately excludes item 3** (dbt) --
+covering it would have made this identity nearly as broad as the
+personal key it replaces, a real architectural discussion (see
+"remaining work" below), not something to decide unilaterally mid-fix.
 
-**Revisit**: next time IAM/credentials in this project get touched, or
-before this project's AWS usage moves beyond a single local dev
-machine.
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (the generic, boto3-default
+env var names) now hold `mdp-airflow-ingest-dev`. The personal key is
+kept under its own name, `MDP_PERSONAL_ACCESS_KEY_ID`/
+`MDP_PERSONAL_SECRET_ACCESS_KEY`, and reaches the two things that
+still need it explicitly:
+- `dbt_run_gold`/`dbt_test_gold`: `BashOperator(env=DBT_AWS_
+  CREDENTIALS, append_env=True)` in `marketplace_batch_pipeline.py` --
+  `append_env=True` merges rather than replaces the subprocess
+  environment, so only these two vars are overridden.
+- `bronze-consumer` (`docker-compose.yml`): a separate container, own
+  write path (`bronze/`, unrelated to `raw/`) -- its compose block now
+  points at `MDP_PERSONAL_ACCESS_KEY_ID`/`SECRET` explicitly instead of
+  inheriting the generic names, so the split above didn't silently
+  change its credential.
+
+**A real incident found and fixed live, not assumed away**: the first
+IAM policy version omitted `logs:CreateLogGroup` (reasoned the log
+group already exists via Terraform, so it shouldn't be needed) --
+Airflow's CloudWatch handler (`watchtower`) calls `CreateLogGroup`
+defensively before creating a log stream regardless, and IAM denies
+the action before any "already exists" check runs. This crash-looped
+the entire `dag-processor` job (not just remote logging), which is why
+a DAG run sat in `queued` with zero tasks scheduled for several
+minutes after the credential rotation -- confirmed via
+`dag-processor` container logs, not assumed to be a parsing delay.
+Fixed by adding the action to the policy (a second, minimal
+Terraform apply).
+
+**Validated end to end**: triggered `marketplace_batch_pipeline`
+manually after the fix -- `extract_postgres` succeeded on
+`mdp-airflow-ingest-dev`, CloudWatch remote logging succeeded (no more
+`AccessDeniedException`), and `dbt_run_gold`/`dbt_test_gold` succeeded
+on the personal key via the `BashOperator` override. The concurrently-
+firing scheduled run (30-min cadence) succeeded too, and
+`bronze-consumer` stayed healthy throughout -- confirmed the
+`MDP_PERSONAL_*` rename didn't silently break it.
+
+**Remaining work**: `dbt_run_gold`/`dbt_test_gold` and
+`bronze-consumer` are still on the personal `terraform-admin` key.
+Scoping dbt's own identity is a bigger question than the
+`mdp-airflow-ingest-dev` split -- it would need Athena
+(`mdp-athena-dbt-dev`), Glue read on `mdp_silver_dev`, Glue write on
+`mdp_gold_dev`, and S3 read `silver/`/write `gold/`, i.e. close to
+everything dbt itself needs to build Gold. `bronze-consumer` needs its
+own separate investigation (S3 `bronze/` write, its own Kafka/Debezium
+CDC path) -- not covered here at all.
 
 ## Databricks pipeline stages were spending most of their time on `%pip install`, not data processing -- fixed
 

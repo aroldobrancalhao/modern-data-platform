@@ -486,3 +486,116 @@ module "bi_reader" {
 
   tags = local.default_tags
 }
+
+##########################################################
+# Airflow Ingest IAM Policy
+##########################################################
+#
+# Scoped to exactly what Airflow's own AWS credential does today, read
+# from the real code, not assumed (roadmap-next-steps.md): the
+# `extract_postgres` task (raw/ read+write+list+delete via
+# PostgresExtractionStage/S3StorageProvider) and remote task-log
+# shipping to the CloudWatch log group Terraform already provisions
+# (module.cloudwatch_airflow, monitoring.tf), via the `aws_default`
+# Connection every Airflow container uses for
+# AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID.
+#
+# Deliberately does NOT cover the `dbt_run_gold`/`dbt_test_gold`
+# BashOperator tasks (Athena `mdp-athena-dbt-dev` workgroup, Glue
+# read on mdp_silver_dev, Glue write on mdp_gold_dev, S3 read on
+# silver/ + write on gold/) -- confirmed live that this DAG's dbt
+# steps need real write access to build Gold, which would have made
+# this identity nearly as broad as the personal key it's replacing.
+# Left on the personal credential for now (a deliberate, narrower-
+# scope decision, not an oversight) -- see
+# marketplace_batch_pipeline.py's BashOperator env overrides for how
+# the split is wired, and roadmap-next-steps.md for the remaining-work
+# entry this leaves behind.
+data "aws_iam_policy_document" "airflow_ingest" {
+
+  statement {
+
+    sid = "S3ListRaw"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      module.datalake.bucket_arn
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["raw/*"]
+    }
+  }
+
+  statement {
+
+    sid = "S3ReadWriteRaw"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject"
+    ]
+
+    resources = [
+      "${module.datalake.bucket_arn}/raw/*"
+    ]
+  }
+
+  statement {
+
+    sid = "CloudWatchAirflowLogs"
+
+    effect = "Allow"
+
+    actions = [
+      # CreateLogGroup: found live -- Airflow's CloudWatch log handler
+      # (watchtower) calls this defensively before creating a log
+      # stream, even though the group already exists (Terraform-
+      # managed, module.cloudwatch_airflow). IAM evaluates the action
+      # grant before the "already exists" business logic runs, so
+      # omitting it (assumed unnecessary since the group pre-exists)
+      # denied the call outright and crash-looped the dag-processor
+      # job entirely, not just remote logging -- confirmed via
+      # dag-processor container logs, not assumed.
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:DescribeLogStreams",
+      "logs:PutLogEvents",
+      "logs:GetLogEvents"
+    ]
+
+    resources = [
+      module.cloudwatch_airflow.arn,
+      "${module.cloudwatch_airflow.arn}:*"
+    ]
+  }
+}
+
+##########################################################
+# Airflow Ingest IAM User
+##########################################################
+
+module "airflow_ingest" {
+
+  source = "../../modules/security/iam_user"
+
+  user_name = "mdp-airflow-ingest-dev"
+
+  policy_name = "mdp-airflow-ingest-policy-dev"
+
+  description = "Scoped access for Airflow's own AWS credential: raw/ S3 read-write (extract_postgres) and the Airflow CloudWatch log group (remote task logging). Does not cover dbt_run_gold/dbt_test_gold, which stay on the personal key -- see roadmap-next-steps.md."
+
+  policy = data.aws_iam_policy_document.airflow_ingest.json
+
+  tags = local.default_tags
+}

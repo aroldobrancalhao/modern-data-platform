@@ -41,3 +41,15 @@ output "bi_reader_secret_access_key" {
   value       = module.bi_reader.secret_access_key
   sensitive   = true
 }
+
+output "airflow_ingest_access_key_id" {
+  description = "Access Key ID for the Airflow Ingest IAM User (extract_postgres + CloudWatch remote logging). Not a secret on its own, but paired here with the secret key -- treat the pair as sensitive."
+  value       = module.airflow_ingest.access_key_id
+  sensitive   = true
+}
+
+output "airflow_ingest_secret_access_key" {
+  description = "Secret Access Key for the Airflow Ingest IAM User. Read once with `terraform output -raw airflow_ingest_secret_access_key` and paste into infrastructure/docker/.env -- never logged or committed."
+  value       = module.airflow_ingest.secret_access_key
+  sensitive   = true
+}

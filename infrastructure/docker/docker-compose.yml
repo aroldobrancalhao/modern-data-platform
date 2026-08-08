@@ -84,13 +84,23 @@ x-airflow-common:
 
     KAFKA_BOOTSTRAP_SERVER: kafka:9092
 
-    # Sourced from ~/.aws/credentials [default] profile via .env (see
-    # AirflowManager._build_connections, which reads these into the
-    # aws_default Connection's login/password) -- no IAM role is
-    # available on this local dev machine, see ADR-003 and
-    # docs/environment-inventory.md.
+    # Dedicated, scoped IAM User (mdp-airflow-ingest-dev, Terraform
+    # module.airflow_ingest) -- covers what Airflow's own credential
+    # actually does: extract_postgres's raw/ S3 read-write, and remote
+    # task-log shipping to CloudWatch via AirflowManager._build_connections
+    # (reads these into the aws_default Connection's login/password). No
+    # IAM role available on this local dev machine, see ADR-003.
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+
+    # Personal terraform-admin key -- NOT the default for this container
+    # anymore, only read explicitly by dbt_run_gold/dbt_test_gold
+    # (marketplace_batch_pipeline.py's BashOperator env override) since
+    # dbt needs real Athena/Glue/S3 write access to build Gold,
+    # deliberately left out of mdp-airflow-ingest-dev's narrower scope --
+    # see roadmap-next-steps.md.
+    MDP_PERSONAL_ACCESS_KEY_ID: ${MDP_PERSONAL_ACCESS_KEY_ID}
+    MDP_PERSONAL_SECRET_ACCESS_KEY: ${MDP_PERSONAL_SECRET_ACCESS_KEY}
 
     # Dedicated Databricks PAT (comment "airflow-orchestration"), not
     # the personal OAuth session in ~/.databrickscfg -- read into the
@@ -1016,8 +1026,13 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      # Personal terraform-admin key, explicitly -- NOT AWS_ACCESS_KEY_ID/
+      # SECRET (those now hold mdp-airflow-ingest-dev, scoped to raw/ only;
+      # this container writes bronze/, a different prefix, unrelated to
+      # that Airflow-specific credential split -- see
+      # roadmap-next-steps.md).
+      AWS_ACCESS_KEY_ID: ${MDP_PERSONAL_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${MDP_PERSONAL_SECRET_ACCESS_KEY}
       # write_deltalake() (the pure-Rust `deltalake` S3 client -- the
       # only place in this project that talks to S3 without boto3,
       # see bronze_consumer.py's module docstring) doesn't follow a

@@ -57,6 +57,7 @@ License: MIT
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -83,6 +84,20 @@ ENTITIES: tuple[tuple[str, str], ...] = (
 )
 
 DBT_PROJECT_DIR = "/opt/mdp/dbt"
+
+# dbt needs real write access to Athena (mdp-athena-dbt-dev workgroup),
+# Glue (read mdp_silver_dev, write mdp_gold_dev) and S3 (read silver/,
+# write gold/) to build Gold -- deliberately out of scope for
+# mdp-airflow-ingest-dev (Terraform module.airflow_ingest), which only
+# covers extract_postgres's raw/ access and CloudWatch remote logging.
+# Overriding just these two env vars (append_env=True merges rather than
+# replaces the container's environment) keeps the personal key scoped to
+# exactly the two tasks that still need it -- see
+# docs/architecture/roadmap-next-steps.md.
+DBT_AWS_CREDENTIALS: dict[str, str] = {
+    "AWS_ACCESS_KEY_ID": os.environ["MDP_PERSONAL_ACCESS_KEY_ID"],
+    "AWS_SECRET_ACCESS_KEY": os.environ["MDP_PERSONAL_SECRET_ACCESS_KEY"],
+}
 
 
 @dag(
@@ -290,11 +305,15 @@ def marketplace_batch_pipeline():
     dbt_run_gold = BashOperator(
         task_id="dbt_run_gold",
         bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --select gold",
+        env=DBT_AWS_CREDENTIALS,
+        append_env=True,
     )
 
     dbt_test_gold = BashOperator(
         task_id="dbt_test_gold",
         bash_command=f"cd {DBT_PROJECT_DIR} && dbt test --select gold",
+        env=DBT_AWS_CREDENTIALS,
+        append_env=True,
     )
 
     run_full_pipeline >> dbt_run_gold >> dbt_test_gold
