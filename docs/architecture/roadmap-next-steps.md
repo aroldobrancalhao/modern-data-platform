@@ -169,52 +169,108 @@ above -- found stale (still pointing at the old `mdp-athena-dev`/old
 staging path) exactly because this DAG was about to start running for
 real; fixed alongside it, not a separate follow-up.
 
-## Power BI -- investigated this session, not implemented
+## Power BI -- connection validated this session, dashboard not built
 
-Sprint 12 (BI) closes this session as **partially complete**: Metabase
-is done (containerized, IAM-scoped, a real dashboard -- see the Bronze
+Sprint 12 (BI) picks back up here: Metabase was already done
+(containerized, IAM-scoped, a real dashboard -- see the Bronze
 batch/streaming and Gold CTAS-location entries above, both found and
-fixed while building it). Power BI was investigated but not built.
+fixed while building it). This session took Power BI from
+"investigated" to **connected and validated end to end** -- Power BI
+Desktop -> ODBC driver -> `mdp-athena-dev` -> Gold tables, real rows
+confirmed visually in Table view for `dim_customers`, `dim_products`,
+`fact_orders`. No dashboard/visual built -- deliberately out of scope
+for this pass, same as the decision record above for other entries;
+tracked as its own remaining-work item below.
 
-**Already decided/investigated, reusable when this gets picked up**:
-- **Connection mechanism**: no native Power BI connector for Athena --
-  the official AWS Athena ODBC driver + a DSN is the standard path.
-  Start with Power BI Desktop, Import mode; consider DirectQuery/Power
-  BI Service only once a real need for live/scheduled data shows up.
-- **IAM: no new identity needed.** `mdp-bi-reader-dev` (Terraform
-  `module.bi_reader`, created for Metabase) is already scoped to
-  exactly what Power BI needs too -- read-only, `mdp_gold_dev`
-  database/tables, the `gold/` S3 prefix, and the dedicated Athena
-  staging bucket. Both BI tools are meant to share this one boundary,
-  not get one each.
-- **Workgroup**: `mdp-athena-dev` (the ad-hoc/BI workgroup, left
-  untouched by the `mdp-athena-dbt-dev` split above) is what Power BI
-  should point at, same as Metabase -- not the dbt-build workgroup.
+**Reused from the earlier investigation, confirmed correct**:
+- **Connection mechanism**: official AWS Athena ODBC driver + a DSN,
+  no native Power BI connector for Athena. Power BI Desktop, Import
+  mode (not DirectQuery -- no real need for live/scheduled data yet).
+- **IAM**: `mdp-bi-reader-dev` (Terraform `module.bi_reader`), same
+  identity Metabase uses, same credential pair
+  (`infrastructure/docker/.env`'s `MDP_BI_READER_ACCESS_KEY_ID`/
+  `SECRET`) -- reused, not regenerated.
+- **Workgroup**: `mdp-athena-dev`, same as Metabase -- not
+  `mdp-athena-dbt-dev`.
+
+**New findings from actually doing the connection (Windows client,
+driven interactively -- this session's environment is WSL2, so
+`powershell.exe` interop scripted the installer/download but the
+in-app clicks were the human's)**:
+
+- **Power BI Desktop was already installed as a Microsoft Store
+  package** (`Microsoft.MicrosoftPowerBIDesktop`, not the classic
+  `.exe`/MSI from powerbi.microsoft.com) -- this turned out to matter
+  (next point), not just an install-location detail.
+- **Driver**: Amazon Athena ODBC 2.x, v2.2.0.1 (official download,
+  `docs.aws.amazon.com/athena/latest/ug/odbc-v2-driver.html`).
+  Requires local admin to install (MSI); a UAC prompt triggered from
+  a non-interactive process (`powershell.exe` invoked from WSL) fails
+  immediately with "operation cancelled by user" without ever
+  rendering -- confirmed live, not assumed. Worked fine once the
+  human double-clicked the (pre-downloaded) MSI directly.
+- **DSN had to be a System DSN, not a User DSN.** Configured first as
+  a User DSN (`HKCU\SOFTWARE\ODBC\ODBC.INI`) -- the driver's own
+  **Test** button reported success, but Power BI's Amazon Athena
+  connector still failed with `ODBC: ERROR [IM002] ... Data source
+  name not found and no default driver specified`. Root cause: the
+  Store-packaged Power BI Desktop runs inside an MSIX AppContainer,
+  which doesn't see per-user DSNs the same way a classically-installed
+  app does. Recreated the identical DSN as a **System DSN**
+  (`HKLM\SOFTWARE\ODBC\ODBC.INI`, needs an elevated ODBC Data Source
+  Administrator -- Task Manager's "Run new task" with the admin
+  checkbox worked, where the WSL-triggered UAC path did not) and
+  Power BI connected immediately. Both DSNs are named `mdp-gold-dev`;
+  the User one was left in place, unused, not worth tearing down.
+- **Default result fetcher hit a real driver bug against this
+  workgroup.** `ResultFetcher=auto` (the default) downloads query
+  results directly from S3; that path failed with `[AmazonAthena]
+  [S3ClientError] ... Response checksums mismatch`. Root cause
+  matches a known AWS SDK C++ issue (composite-checksum response
+  validation unsupported, `aws/aws-sdk-cpp#3496`), surfaced here by
+  the driver's 2.2.0.0 migration to the AWS SDK CRT HTTP client (see
+  the driver's own release notes). **Fix**: `ResultFetcher=
+  GetQueryResultsStream` (Advanced Options in the DSN config) --
+  bypasses the direct-S3 path entirely and uses Athena's streaming API
+  instead. No IAM change needed: `mdp-bi-reader-dev`'s policy already
+  grants `athena:GetQueryResultsStream` (`security.tf`, added
+  alongside the other Athena actions when the identity was first
+  created for Metabase).
+- **DSN creation could not be scripted from this session.** Claude
+  Code's own auto-mode permission classifier blocked every
+  `*-OdbcDsn` PowerShell cmdlet attempted via the WSL->`powershell.exe`
+  bridge -- including a read-only `Get-OdbcDsn`, not just the
+  registry-writing `Add-OdbcDsn`. Every DSN field in both the User and
+  System DSN was entered by hand through the ODBC Data Source
+  Administrator GUI. Driver installation and app-launching (
+  `Start-Process`, `explorer.exe`) were not blocked -- the block was
+  specific to the ODBC-DSN cmdlet family.
+
+**Validated**: `Get Data -> Amazon Athena -> DSN mdp-gold-dev ->
+Import -> dim_customers/dim_products/fact_orders -> Load`, then
+confirmed in Power BI's Table view that all three tables hold real
+rows (visual confirmation only -- exact row counts weren't captured
+this session, no reason to expect them to differ from Metabase's
+already-checked counts in `dashboards/metabase/README.md`).
 
 **Remaining work**:
-1. Install the Athena ODBC driver locally, configure a DSN against
-   `mdp-athena-dev` using the `mdp-bi-reader-dev` credentials.
-2. Open Power BI Desktop, connect via the DSN, validate a real query
-   against `fact_orders`/`dim_customers`/`dim_products` -- the same
-   bar Metabase's connection was already held to
-   (`docs/architecture/roadmap-next-steps.md`'s Metabase entries,
-   `dashboards/metabase/README.md`).
-3. Decide Import vs DirectQuery. If scheduled refresh via Power BI
-   Service ever becomes a real requirement, revisit two things
-   already flagged as open elsewhere in this file: whether an
-   On-premises Data Gateway is needed, and whether `s3_data_naming:
-   schema_table`'s "no atomic swap on rebuild" (see the Gold
-   CTAS-location entry above) becomes a concurrency concern for Power
-   BI the same way it now genuinely is for Metabase.
-4. Document the final setup as a new ADR (connection method, auth
-   model, refresh strategy) once actually implemented -- not written
-   speculatively ahead of the real setup, same discipline as
-   ADR-011.
-
-**Not done this session**: closing this out needs a human at a
-machine with Power BI Desktop installed (Windows, typically) --
-outside what this session could drive end-to-end the way Metabase
-(containerized, fully API-scriptable, no separate desktop app) did.
+1. Build an actual dashboard/report -- this session deliberately
+   stopped at connection validation, no visuals. Natural first target
+   is parity with Metabase's `Gold Layer Overview`
+   (`dashboards/metabase/README.md`), same underlying data, same
+   caveats about the simulator's flat cardinality.
+2. Decide Import vs DirectQuery only if a real need for live/scheduled
+   data shows up. If scheduled refresh via Power BI Service ever
+   becomes a requirement, revisit two things already flagged
+   elsewhere in this file: whether an On-premises Data Gateway is
+   needed, and whether `s3_data_naming: schema_table`'s "no atomic
+   swap on rebuild" (see the Gold CTAS-location entry above) becomes a
+   concurrency concern for Power BI the way it now genuinely is for
+   Metabase.
+3. Document the final setup as a new ADR (connection method, the
+   System-DSN-not-User-DSN finding, the `ResultFetcher` workaround,
+   auth model) once the dashboard exists -- not written speculatively
+   ahead of it, same discipline as ADR-011.
 
 ## Fraud Detection (Sprint 15) deferred to v2
 
