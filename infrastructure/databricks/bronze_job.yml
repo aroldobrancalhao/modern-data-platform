@@ -6,11 +6,31 @@ resources:
       parameters:
         - name: entities
           default: customers
-        - name: wheel_path
-          default: ${workspace.root_path}/artifacts/.internal
+
+      # mdp-bronze-silver: workspace base environment (Terraform-free --
+      # created via the Environments API, /api/environments/v1/
+      # workspace-base-environments, not documented in the public bundle
+      # schema at the time this was written). Scoped to exactly what
+      # data_platform.compute/storage need (pydantic + the scoped
+      # modern-data-platform wheel) -- see pyproject.toml's
+      # [project.optional-dependencies] comment for why the wheel itself
+      # is scoped. Referencing it here (environment_key on the task
+      # below) is what replaces the old per-notebook `%pip install` +
+      # `restartPython()` cell -- for serverless notebook tasks, a
+      # job-level environment overrides whatever's selected in the
+      # notebook's own Environment side panel, so this needs no manual
+      # UI step. See docs/architecture/roadmap-next-steps.md for the
+      # portability trade-off (this base_environment ID is tied to one
+      # real deployment) and the stale-cache risk (the wheel's filename
+      # doesn't change per deploy).
+      environments:
+        - environment_key: mdp-bronze-silver
+          spec:
+            base_environment: workspace-base-environments/mdp-bronze-silver-13015gfsq6
 
       tasks:
         - task_key: bronze
+          environment_key: mdp-bronze-silver
 
           notebook_task:
             notebook_path: ../../notebooks/bronze/ingest_sources.ipynb

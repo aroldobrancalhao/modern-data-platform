@@ -6,11 +6,19 @@ resources:
       parameters:
         - name: entities
           default: customers
-        - name: wheel_path
-          default: ${workspace.root_path}/artifacts/.internal
+
+      # mdp-bronze-silver base environment -- see bronze_job.yml's
+      # comment for the full explanation (why this replaces the
+      # per-notebook %pip install cell, the portability trade-off, the
+      # stale-cache risk).
+      environments:
+        - environment_key: mdp-bronze-silver
+          spec:
+            base_environment: workspace-base-environments/mdp-bronze-silver-13015gfsq6
 
       tasks:
         - task_key: bronze_optimize
+          environment_key: mdp-bronze-silver
 
           notebook_task:
             notebook_path: ../../notebooks/bronze/optimize_bronze.ipynb

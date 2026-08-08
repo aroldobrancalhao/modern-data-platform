@@ -17,9 +17,12 @@ WORKDIR /app
 # [build-system] -- src/ is not an installable package (see
 # docs/architecture/roadmap-next-steps.md, "src/ packages aren't
 # installable -- PYTHONPATH required outside pytest"), only its
-# [project.dependencies] are meant to be installed here.
+# [project.dependencies] are meant to be installed here. --extra
+# streaming: confluent-kafka (this consumer's whole reason to exist)
+# moved out of the core dependency list and into an optional group --
+# see pyproject.toml's comment on [project.optional-dependencies].
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --extra streaming
 
 # Code added after the dependency layer so an app-only change doesn't
 # invalidate the much slower `uv sync` layer above.

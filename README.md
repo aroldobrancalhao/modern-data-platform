@@ -374,8 +374,16 @@ cd modern-data-platform
 ## Install dependencies
 
 ```bash
-uv sync
+uv sync --all-extras
 ```
+
+`--all-extras` pulls in `orchestration`/`warehouse`/`streaming`
+(Airflow, dbt, confluent-kafka) alongside the core dependencies --
+split out of `[project.dependencies]` so the Databricks notebooks'
+wheel install (`uv build --wheel`, `infrastructure/databricks/
+databricks.yml`) doesn't pull in Airflow's/dbt's/Kafka's dependency
+trees, none of which those notebooks import. Local dev needs all of
+it; plain `uv sync` (no `--all-extras`) now leaves those three out.
 
 ## Start local infrastructure
 

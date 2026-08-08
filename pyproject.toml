@@ -11,13 +11,8 @@ authors = [
 
 dependencies = [
     "alembic>=1.18.5",
-    "apache-airflow==3.3.0",
-    "apache-airflow-providers-standard>=1.16.0",
     "boto3>=1.43.52",
-    "confluent-kafka>=2.15.0",
     "databricks-sdk>=0.122.0",
-    "dbt-athena>=1.11.0",
-    "dbt-core>=1.12.0",
     "deltalake>=1.6.2",
     "faker>=40.28.1",
     "httpx>=0.28.1",
@@ -30,6 +25,38 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
     "structlog>=26.1.0",
+]
+
+# Orchestration/warehouse/streaming deps, split out of the core
+# dependencies above -- found while investigating why the Databricks
+# notebooks' wheel install (`%pip install`, every one of the 4
+# marketplace_batch_pipeline stages) was pulling in apache-airflow's
+# whole dependency tree and dbt/confluent-kafka, none of which the
+# Bronze/Silver notebooks import (confirmed by reading their actual
+# `import` lines -- only `data_platform.compute.*`/`storage.config`,
+# which need pydantic and (Databricks-Runtime-provided) pyspark, not
+# any of these). `uv build --wheel` (infrastructure/databricks/
+# databricks.yml) only bakes `[project.dependencies]` into the wheel's
+# Requires-Dist -- optional-dependencies are never installed unless
+# explicitly requested -- so this alone shrinks the Databricks wheel
+# without changing the build command. Local dev needs all of them:
+# see README's `uv sync --all-extras`. airflow/Dockerfile installs
+# apache-airflow/dbt-athena/dbt-core itself already (hardcoded, not
+# derived from this file -- see that file's own comment), so it's
+# unaffected either way; infrastructure/docker/streaming/Dockerfile
+# (bronze-consumer, needs confluent-kafka) now passes `--extra
+# streaming` explicitly.
+[project.optional-dependencies]
+orchestration = [
+    "apache-airflow==3.3.0",
+    "apache-airflow-providers-standard>=1.16.0",
+]
+warehouse = [
+    "dbt-athena>=1.11.0",
+    "dbt-core>=1.12.0",
+]
+streaming = [
+    "confluent-kafka>=2.15.0",
 ]
 
 [dependency-groups]

@@ -411,6 +411,122 @@ that can assume one) scoped to exactly that, then rotating
 before this project's AWS usage moves beyond a single local dev
 machine.
 
+## Databricks pipeline stages were spending most of their time on `%pip install`, not data processing -- fixed
+
+Investigated why `run_databricks_full_pipeline` took ~13-14 minutes
+for a ~137k-row dataset. **Not cluster cold-start** (ruled out with
+real numbers, not assumed): a clean, non-queued historical run showed
+`queue_duration: None` and `setup_duration: 4000` (4 seconds) via the
+Databricks Jobs API (`GET /api/2.1/jobs/runs/get`) -- the ~13-14
+minutes were entirely inside each stage's `execution_duration`
+(bronze 198s, bronze_validate 141s, bronze_optimize 169s, silver
+215s).
+
+**Real cause, confirmed by reading the notebooks and the wheel build,
+not guessed**: all 4 notebooks (`notebooks/bronze/ingest_sources.
+ipynb`, `validate_bronze.ipynb`, `optimize_bronze.ipynb`, `notebooks/
+silver/transform_silver.ipynb`) ran `%pip install $wheel_glob` +
+`dbutils.library.restartPython()` on every single execution -- and
+the wheel being installed (`uv build --wheel`, no scoping) pulled in
+`[project.dependencies]`'s *entire* list, including `apache-airflow==
+3.3.0` (one of the largest dependency trees in the Python ecosystem),
+`apache-airflow-providers-standard`, `dbt-athena`, `dbt-core`,
+`confluent-kafka` -- none of which any of the 4 notebooks import
+(checked their actual `import` lines: only `data_platform.compute.*`/
+`storage.config`, needing `pydantic` and Databricks-Runtime-provided
+`pyspark`).
+
+**Fixed, two complementary changes**:
+
+1. **Scoped the wheel** (`pyproject.toml`): moved
+   `apache-airflow`/`apache-airflow-providers-standard` (`orchestration`),
+   `dbt-athena`/`dbt-core` (`warehouse`), and `confluent-kafka`
+   (`streaming`) into `[project.optional-dependencies]`. `uv build
+   --wheel` only bakes `[project.dependencies]` into the wheel's
+   `Requires-Dist` -- confirmed by inspecting the built wheel's
+   `METADATA` directly, not assumed. Local dev needs everything: README
+   now says `uv sync --all-extras`. `infrastructure/docker/streaming/
+   Dockerfile` (bronze-consumer, needs `confluent-kafka`) now passes
+   `--extra streaming` explicitly. `airflow/Dockerfile` installs
+   Airflow/dbt itself already (hardcoded, not derived from this file --
+   see that file's own comment), so it's unaffected.
+
+2. **Removed the per-notebook `%pip install`/`restartPython()` cell
+   entirely**, replaced with a Databricks workspace base environment
+   (`mdp-bronze-silver`, `workspace-base-environments/
+   mdp-bronze-silver-13015gfsq6`) referenced from each `*_job.yml`'s
+   `environments`/`environment_key` -- dependencies are pre-materialized
+   once, not reinstalled on every run.
+
+**A real, live-caught bug in the base environment's own dependency
+list**: the first attempt pinned `delta-spark>=4.3.1`, which failed --
+`ERROR: Cannot install delta-spark>=4.3.1 ... The user requested
+(constraint) delta-spark==3.4.0` -- the Databricks Runtime locks
+`delta-spark` (and `pyspark`) via its own immutable package
+constraints; declaring a version at all, let alone a newer one,
+conflicts with the runtime's pin. Fixed by not declaring
+`delta-spark`/`pyspark` in the environment spec at all (same as
+`pyspark`, which was already "Requirement already satisfied" even
+before this fix) -- confirmed via the Environments API's own
+materialization log, not assumed fixed after editing the YAML.
+
+**Revisited, not just left as a side effect**: checked afterward
+whether `pyspark` belonged in the scoped dependency list at all, or
+was only there because `configure_spark_with_delta_pip()` imports it
+(`data_platform/compute/spark.py`) -- not because the *environment*
+needs to install it. Official docs (`docs.databricks.com/aws/en/
+compute/serverless/dependencies`) settle it: *"Do not install PySpark
+or any library that installs PySpark as a dependency on your
+serverless notebooks. Doing so will stop your session and result in
+an error."* -- Databricks Runtime provides `pyspark` (and, per the
+fix above, `delta-spark`) natively; declaring either isn't just
+redundant, it's actively unsafe. The validated run (next section)
+already exercises exactly this -- neither package declared anywhere
+(wheel or environment spec), both notebooks' `import pyspark.sql`/
+`from delta import configure_spark_with_delta_pip` succeeded -- so
+this is confirmed by a real passing run, not just the doc quote.
+
+**No manual UI step needed -- found live, contradicting an earlier
+web-search-sourced assumption in this same investigation**: the
+`databricks-sdk` package's own docstrings (introspected locally, not
+trusted from public docs search results, which had claimed
+`environment_key` doesn't apply to notebook tasks) state plainly: *"For
+serverless notebook tasks, if the environment_key is not specified,
+the notebook environment will be used if present. If a jobs
+environment is specified, it will override the notebook environment."*
+Wiring the environment via `environment_key` in the bundle YAML (done)
+is therefore fully declarative -- no per-notebook Environment side
+panel click needed, unlike the original plan for this investigation.
+
+**Two trade-offs accepted, not silently absorbed**:
+- **Portability loss**: `base_environment: workspace-base-environments/
+  mdp-bronze-silver-13015gfsq6` is tied to this one real deployment
+  (the resource ID is workspace-specific) -- the old `wheel_path`
+  parameter (`${workspace.root_path}/artifacts/.internal`, now removed)
+  was deliberately portable across users/targets (dev/prod). Only one
+  target is actually in use today, so this is acceptable now, but
+  **revisit if/when a second real target (e.g. `prod`) gets stood up**
+  -- the base environment would need creating there too, with its own
+  ID substituted into all 4 `*_job.yml` files.
+- **Stale-cache risk**: the wheel's filename is static
+  (`modern_data_platform-0.1.0-py3-none-any.whl` -- `pyproject.toml`'s
+  version isn't bumped per deploy) and the base environment references
+  it by that exact path. Confirmed live that this isn't hypothetical:
+  the first `databricks bundle deploy` after the wheel-scoping change
+  did **not** get picked up until a manual `refresh-workspace-
+  base-environment` call -- the environment had already materialized
+  against the *old*, unscoped wheel moments earlier and kept serving
+  that cached result. **Not fixed now**: the real fix is versioning the
+  wheel's filename per deploy (e.g. a commit-hash suffix) and calling
+  `refresh-workspace-base-environment` as part of the deploy step --
+  out of scope for this pass, tracked here so it isn't lost.
+
+**Validation pending**: measure real per-stage timing on the next
+`marketplace_batch_pipeline` run against the new setup (via the same
+`GET /api/2.1/jobs/runs/get` approach used for the baseline above) and
+compare against the 198s/141s/169s/215s baseline; re-run `dbt test
+--select gold` to confirm 28/28 still passes.
+
 ## `airflow tasks test` does not exercise the real worker/remote-log path
 
 `airflow tasks test <dag> <task>` runs the task inline in the CLI
