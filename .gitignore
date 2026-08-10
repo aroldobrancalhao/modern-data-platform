@@ -109,6 +109,18 @@ override.tf.json
 
 !.terraform.lock.hcl
 
+# `terraform output -json` (scripts/export-terraform-outputs.sh) does
+# NOT mask `sensitive = true` outputs the way plain `terraform output`
+# does -- every IAM access-key/secret-key output this project has
+# lands here in plaintext. Meant to be generated locally, read by
+# airflow/config/bootstrap/terraform.py at container-bootstrap time,
+# never committed -- found live, 2026-08-10 (see
+# docs/architecture/roadmap-next-steps.md): the export script was
+# broken (a path bug) from before this project added any sensitive
+# outputs, which meant it silently never got re-run since, so this
+# never surfaced until fixing the script made it runnable again.
+airflow/config/terraform_outputs.json
+
 
 # Build
 build/

@@ -869,3 +869,48 @@ means no single container can run away unbounded anymore. The
 "possible future action" above is still the real fix for the
 aggregate problem.
 
+
+## `airflow/config/terraform_outputs.json` was one `export-terraform-outputs.sh` run away from leaking real AWS secret keys into git history -- fixed
+
+Found live while committing the CloudWatch-ARN-via-Terraform work
+(this same session): `terraform output -json` (what
+`scripts/export-terraform-outputs.sh` has always used) does **not**
+mask `sensitive = true` outputs the way plain `terraform output` does
+-- every IAM access-key/secret-key pair this project has
+(`bi_reader_*`, `airflow_ingest_*`, `bronze_consumer_*`,
+`dbt_gold_*`) lands in that file in real plaintext. The file is
+tracked in git, not gitignored.
+
+**Why this hadn't already happened**: the export script had a
+pre-existing path bug (relative paths that only resolved correctly if
+invoked from the repo root, while `terraform output` needs to run
+against the `environments/dev` working directory -- two incompatible
+CWD requirements in one un-`cd`'d script), broken since before this
+project had any `sensitive` Terraform outputs at all (the file's only
+git history entry, one commit, predates `bi_reader`/`airflow_ingest`/
+`bronze_consumer`/`dbt_gold` entirely -- confirmed by reading that
+commit's content directly: 7 outputs, all non-sensitive, zero
+`secret`/`access_key` fields). The script silently never got
+successfully re-run since, so the exposure never had a chance to
+surface -- fixing the path bug today (to wire
+`AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN` through it) is what made the script
+runnable again, which is what surfaced this.
+
+**Confirmed clean, not assumed**: `git log --all --full-history` for
+this path returns exactly one commit; its content was checked
+directly (`git show <hash>:path | grep -i "secret\|access_key"`) --
+zero matches. No real secret was ever actually committed, at any
+point, on any branch. The one working-tree version that *did* briefly
+contain real values (written by this session's own test run of the
+freshly-fixed script) was caught before `git add`, never staged, never
+committed.
+
+**Fixed**: `airflow/config/terraform_outputs.json` added to
+`.gitignore` (Terraform section, alongside `*.tfstate`/`*.tfvars` --
+same reasoning, a Terraform-derived artifact that can carry real
+secrets). Removed from the git index with `git rm --cached` (file kept
+on disk -- it's meant to be generated locally by
+`scripts/export-terraform-outputs.sh` and read by
+`airflow/config/bootstrap/terraform.py` at container-bootstrap time,
+never version-controlled). Regenerating it locally after the `.gitignore`
+change confirmed it's correctly ignored going forward.
