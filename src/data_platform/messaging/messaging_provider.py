@@ -118,6 +118,39 @@ class MessagingProvider(BaseProvider, ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def recover_from_lost_assignment(
+        self,
+        topic: str,
+        group_id: str,
+        error: Exception,
+    ) -> bool:
+        """
+        Given an exception raised by a prior commit() call, discards
+        and replaces the underlying consumer for (topic, group_id) if
+        ``error`` reflects this provider's specific, unrecoverable
+        group-membership-loss condition (Kafka: ``_ASSIGNMENT_LOST`` --
+        the broker no longer considers this consumer a group member at
+        all) -- one a plain retry cannot resolve, since the existing
+        consumer keeps presenting the same stale/revoked membership to
+        the broker no matter how many times commit() is retried
+        against it (see docs/architecture/roadmap-next-steps.md,
+        "commit-failure retry can livelock an entity permanently").
+
+        Returns True if a rejoin was performed -- the caller (Bronze
+        Consumer's ``_flush()``) is then responsible for abandoning the
+        in-flight micro-batch (clearing its buffer) rather than
+        retrying it with the now-discarded consumer, since the
+        replacement consumer starts over from the last *committed*
+        offset, not from whatever position the discarded one was at.
+
+        Returns False (and does nothing) for any other error -- e.g. a
+        transient network blip, or a write failure that never reached
+        commit() at all -- where the caller's existing
+        retry-without-rejoining behavior already tends to self-heal.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def consumer_lag(
         self,
         topic: str,

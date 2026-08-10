@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import cast
 
 from confluent_kafka import Consumer
+from confluent_kafka import KafkaError
+from confluent_kafka import KafkaException
 from confluent_kafka import Message as ConfluentMessage
 from confluent_kafka import TopicPartition
 
@@ -112,6 +114,38 @@ class KafkaMessagingProvider(MessagingProvider):
             )
 
         consumer.commit(asynchronous=False)
+
+    def recover_from_lost_assignment(
+        self,
+        topic: str,
+        group_id: str,
+        error: Exception,
+    ) -> bool:
+        if not (
+            isinstance(error, KafkaException)
+            and error.args[0].code() == KafkaError._ASSIGNMENT_LOST
+        ):
+            return False
+
+        cache_key = (topic, group_id)
+
+        consumer = self._consumers.pop(cache_key, None)
+
+        if consumer is not None:
+            try:
+                consumer.close()
+            except Exception:
+                # Best-effort only: the whole point of _ASSIGNMENT_LOST
+                # is that the broker already stopped considering this
+                # consumer a group member, so a clean leave-group on
+                # close() isn't guaranteed to succeed -- and doesn't
+                # need to. Discarding the reference above (so the next
+                # _resolve_consumer() call builds a fresh replacement)
+                # is what actually matters; swallowing a close()
+                # failure here must not stop that from happening.
+                pass
+
+        return True
 
     def consumer_lag(
         self,

@@ -402,15 +402,60 @@ def _flush(
         # rows -- an accepted duplicate, per this module's docstring
         # ("Bronze keeps every version of a row it has ever seen").
         provider.commit(topic, group_id=_CONSUMER_GROUP_ID)
-    except Exception:
+    except Exception as exc:
         WRITE_FAILURES.labels(entity=entity).inc()
 
-        logger.exception(
-            "Bronze flush failed for entity '%s' (%d buffered records) -- "
-            "offsets left uncommitted, will retry next cycle.",
-            entity,
-            len(buffer.records),
-        )
+        # recover_from_lost_assignment() is a no-op (returns False) for
+        # every failure except the provider's specific unrecoverable
+        # group-membership-loss condition (Kafka: _ASSIGNMENT_LOST) --
+        # see that method's docstring. The plain "leave the buffer
+        # intact, retry next cycle" path above is correct and
+        # self-healing for an ordinary transient failure, but not for
+        # this one: the round-robin loop only calls consume_batch()
+        # (the sole thing that lets the underlying client actually
+        # process a revoked-and-rejoin membership change) when this
+        # entity's buffer has room, and a commit failure never clears
+        # it -- so once the buffer is exactly full when
+        # _ASSIGNMENT_LOST hits, that gate stays shut forever and this
+        # exact commit() keeps failing the exact same way, indefinitely
+        # (confirmed live during the Frente 3 reprocess, see
+        # docs/architecture/roadmap-next-steps.md, "commit-failure
+        # retry can livelock an entity permanently"). Clearing the
+        # buffer here is what breaks that deadlock: an empty buffer
+        # reopens the round-robin's `remaining > 0` gate next round, so
+        # consume_batch() runs again, which is what actually drives the
+        # freshly recreated consumer through a real rejoin. The
+        # records already written above (write_deltalake() succeeded;
+        # only commit() failed) get re-fetched and re-appended once the
+        # rejoined consumer resumes from the last *committed* offset --
+        # the same accepted-duplicate tradeoff this module's docstring
+        # already names for a bare commit failure, just now guaranteed
+        # to resolve in one extra write instead of never resolving.
+        if provider.recover_from_lost_assignment(
+            topic, group_id=_CONSUMER_GROUP_ID, error=exc
+        ):
+            dropped = len(buffer.records)
+
+            buffer.clear()
+
+            logger.warning(
+                "Bronze flush for entity '%s' lost its Kafka group "
+                "assignment -- recreated the consumer and dropped the "
+                "buffered batch (%d records, already durably written) "
+                "so consumption can resume; the same records will be "
+                "re-fetched and re-written once the consumer rejoins.",
+                entity,
+                dropped,
+            )
+        else:
+            logger.exception(
+                "Bronze flush failed for entity '%s' (%d buffered "
+                "records) -- offsets left uncommitted, will retry next "
+                "cycle.",
+                entity,
+                len(buffer.records),
+            )
+
         return
 
     RECORDS_WRITTEN.labels(entity=entity).inc(len(table))
