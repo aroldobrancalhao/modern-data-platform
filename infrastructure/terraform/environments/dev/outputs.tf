@@ -10,6 +10,11 @@ output "datalake_bucket" {
   value = module.datalake.bucket_name
 }
 
+output "airflow_cloudwatch_log_group_arn" {
+  description = "ARN of Airflow's CloudWatch log group (module.cloudwatch_airflow, monitoring.tf). Not sensitive (a resource identifier, not a credential) -- unlike the access-key outputs below, safe to print directly. Feeds infrastructure/docker/.env's AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN (consumed by docker-compose.yml's AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER) via scripts/export-terraform-outputs.sh, instead of being hand-typed -- see roadmap-next-steps.md."
+  value       = module.cloudwatch_airflow.arn
+}
+
 output "bronze_database" {
   value = module.glue_bronze.database_name
 }
