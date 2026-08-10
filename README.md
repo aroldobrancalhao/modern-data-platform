@@ -163,7 +163,6 @@ modern-data-platform/
 │   │   ├── storage/
 │   │   ├── types/
 │   │   └── workflow/
-│   ├── ingestion/
 │   ├── integrations/
 │   ├── quality/
 │   ├── simulator/

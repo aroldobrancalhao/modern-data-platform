@@ -62,22 +62,6 @@ availability trade-off, not a bug, and now that `mdp-athena-dbt-dev`
 is a dedicated workgroup, a bad rebuild can no longer affect anything
 sharing infrastructure with the BI-facing workgroup either way).
 
-## `src/` top-level module structure has no single source of truth
-
-ADR-001 and ADR-004 (both dated 2026-07-19) each describe a different
-`src/` module list -- ADR-001: `platform/ingestion/streaming/processing/
-quality/simulator/common`; ADR-004: `platform/cloud/ingestion/streaming/
-processing/quality/orchestration/analytics/common`. Neither matches the
-real code: the actual top-level packages today are `common/
-data_platform/ingestion/integrations/quality/simulator/streaming`
-(`platform` became `data_platform`, `cloud` became `integrations`),
-and that rename was never captured in an ADR.
-
-**Not written now**: needs a new ADR reconciling the real structure
-against both ADR-001 and ADR-004, not a quick edit to either -- found
-while auditing all 11 ADRs for staleness, deliberately out of scope
-for that pass.
-
 ## Simulator -- order status progression engine
 
 `orders.status` has cardinality 1 today -- confirmed via a real
@@ -130,8 +114,9 @@ site-packages.
 
 **Fix would be**: add `[build-system]` (hatchling) +
 `[tool.hatch.build.targets.wheel] packages = ["src/common", "src/
-data_platform", "src/ingestion", "src/integrations", "src/quality",
-"src/simulator", "src/streaming"]`, so `uv sync` installs the project
+data_platform", "src/integrations", "src/quality", "src/simulator",
+"src/streaming"]` (`src/ingestion` dropped from this list -- removed
+entirely, see ADR-013), so `uv sync` installs the project
 in editable mode and every `src/` package becomes importable without
 `PYTHONPATH`, everywhere (`pytest`'s explicit `pythonpath` config could
 then also be dropped).
