@@ -599,3 +599,87 @@ module "airflow_ingest" {
 
   tags = local.default_tags
 }
+
+##########################################################
+# Bronze Consumer IAM User
+##########################################################
+
+# Scope confirmed by reading src/streaming/consumers/bronze_consumer.py
+# and its call graph directly, not assumed from the entity's name:
+# the only AWS-touching call in the whole module is
+# write_deltalake(StorageConfig.bronze(entity), table, mode="append")
+# -- append-only writes to s3://.../bronze/{entity}/, one Delta table
+# per streaming entity, never read back by this process. No Silver/
+# Gold/Athena/Glue call anywhere in this module -- it doesn't join or
+# query analytically, it just lands CDC events (see the module's own
+# docstring). resolve_bronze_schema() (data_platform.compute.
+# bronze_schema) queries Postgres information_schema.columns directly
+# via psycopg -- a Postgres credential concern (POSTGRES_USER/
+# PASSWORD, already in docker-compose.yml), not AWS IAM, so it isn't
+# part of this policy.
+data "aws_iam_policy_document" "bronze_consumer" {
+
+  statement {
+
+    sid = "S3ListBronze"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      module.datalake.bucket_arn
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["bronze/*"]
+    }
+  }
+
+  statement {
+
+    sid = "S3ReadWriteBronze"
+
+    effect = "Allow"
+
+    actions = [
+      # No s3:DeleteObject, deliberately, unlike airflow_ingest's
+      # raw/* grant -- bronze_consumer.py only ever calls
+      # write_deltalake(..., mode="append"), append-only per this
+      # module's own docstring ("Bronze keeps every version of a row
+      # it has ever seen"). It never deletes, compacts or vacuums its
+      # own table (that's optimize_bronze.ipynb, a separate batch-flow
+      # process against a *different* physical table --
+      # StorageConfig.bronze_batch(), not .bronze() -- see
+      # roadmap-next-steps.md's Bronze batch/streaming-split entry).
+      # GetObject is still needed even for a pure-append writer: every
+      # write_deltalake() call reads the current _delta_log first to
+      # determine the next commit version.
+      "s3:GetObject",
+      "s3:PutObject"
+    ]
+
+    resources = [
+      "${module.datalake.bucket_arn}/bronze/*"
+    ]
+  }
+}
+
+module "bronze_consumer" {
+
+  source = "../../modules/security/iam_user"
+
+  user_name = "mdp-bronze-consumer-dev"
+
+  policy_name = "mdp-bronze-consumer-policy-dev"
+
+  description = "Scoped access for the Bronze Consumer's own AWS credential: bronze/ S3 read-write only (append-only Delta writes). Currently shares Airflow's personal-key fallback (MDP_PERSONAL_ACCESS_KEY_ID/SECRET) in infrastructure/docker/docker-compose.yml -- see roadmap-next-steps.md."
+
+  policy = data.aws_iam_policy_document.bronze_consumer.json
+
+  tags = local.default_tags
+}

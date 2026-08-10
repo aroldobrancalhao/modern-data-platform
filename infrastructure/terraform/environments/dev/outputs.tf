@@ -53,3 +53,15 @@ output "airflow_ingest_secret_access_key" {
   value       = module.airflow_ingest.secret_access_key
   sensitive   = true
 }
+
+output "bronze_consumer_access_key_id" {
+  description = "Access Key ID for the Bronze Consumer IAM User (bronze/ S3 read-write only). Not a secret on its own, but paired here with the secret key -- treat the pair as sensitive. Not wired into infrastructure/docker/docker-compose.yml yet -- bronze-consumer still runs on MDP_PERSONAL_ACCESS_KEY_ID/SECRET, see roadmap-next-steps.md."
+  value       = module.bronze_consumer.access_key_id
+  sensitive   = true
+}
+
+output "bronze_consumer_secret_access_key" {
+  description = "Secret Access Key for the Bronze Consumer IAM User. Read once with `terraform output -raw bronze_consumer_secret_access_key` and paste into infrastructure/docker/.env when the credential swap itself is approved -- never logged or committed."
+  value       = module.bronze_consumer.secret_access_key
+  sensitive   = true
+}
