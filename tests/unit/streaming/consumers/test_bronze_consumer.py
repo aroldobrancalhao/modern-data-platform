@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -36,11 +37,19 @@ _SCHEMA = pa.schema(
     [
         ("id", pa.string()),
         ("amount", pa.decimal128(10, 2)),
+        ("_cdc_ts_ms", pa.int64()),
     ]
 )
 
+_SOURCE_TS_MS = 1785607968684
 
-def _envelope(entity: str, op: str, after: dict[str, Any]) -> bytes:
+
+def _envelope(
+    entity: str,
+    op: str,
+    after: dict[str, Any],
+    source_ts_ms: int = _SOURCE_TS_MS,
+) -> bytes:
     envelope = {
         "schema": {
             "fields": [
@@ -51,7 +60,11 @@ def _envelope(entity: str, op: str, after: dict[str, Any]) -> bytes:
                 }
             ]
         },
-        "payload": {"op": op, "source": {"table": entity}, "after": after},
+        "payload": {
+            "op": op,
+            "source": {"table": entity, "ts_ms": source_ts_ms},
+            "after": after,
+        },
     }
 
     return json.dumps(envelope).encode("utf-8")
@@ -213,10 +226,14 @@ def _bronze_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def _schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    # **kwargs: run_bronze_consumer calls resolve_bronze_schema(entity,
+    # include_cdc_metadata=True) -- _SCHEMA already has _cdc_ts_ms
+    # unconditionally, so the flag itself doesn't need to change
+    # anything here, just be accepted.
     monkeypatch.setattr(
         bronze_consumer,
         "resolve_bronze_schema",
-        lambda entity: _SCHEMA,
+        lambda entity, **kwargs: _SCHEMA,
     )
 
 
@@ -249,6 +266,60 @@ def test_flushes_and_commits_once_the_batch_size_threshold_is_reached(
 
     assert table.num_rows == batch_size
     assert provider.commits[(topic, bronze_consumer._CONSUMER_GROUP_ID)] == 1
+
+
+def test_cdc_ts_ms_is_populated_from_the_envelope_source_ts_ms(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bronze_consumer.time, "monotonic", _FakeClock())
+
+    provider = FakeMessagingProvider()
+    topic = topic_for("orders")
+
+    provider.enqueue(
+        topic,
+        bronze_consumer._CONSUMER_GROUP_ID,
+        _envelope(
+            "orders",
+            "c",
+            {"id": "order-1", "amount": 9.99},
+            source_ts_ms=1785600000000,
+        ),
+    )
+    provider.enqueue(
+        topic,
+        bronze_consumer._CONSUMER_GROUP_ID,
+        _envelope(
+            "orders",
+            "u",
+            {"id": "order-1", "amount": 12.50},
+            source_ts_ms=1785600001234,
+        ),
+    )
+
+    # Same reasoning as test_flushes_on_batch_age_before_reaching_the_size_threshold:
+    # the fake clock advances 1s per is_due() check, so the buffer ages
+    # past _MAX_BATCH_AGE_SECONDS well within this many iterations.
+    run_bronze_consumer(
+        provider,
+        entities=("orders",),
+        max_iterations=int(bronze_consumer._MAX_BATCH_AGE_SECONDS) + 5,
+    )
+
+    rows = DeltaTable(str(tmp_path / "orders")).to_pyarrow_table().to_pylist()
+
+    # Bronze is append-only -- both versions land as separate rows,
+    # each carrying its own real _cdc_ts_ms (this is exactly what lets
+    # a later dedup step -- see _deduplicate_by_key -- pick the
+    # genuinely most recent one instead of trusting row-arrival order
+    # or a business `updated_at` column).
+    by_ts = {row["_cdc_ts_ms"]: row["amount"] for row in rows}
+
+    assert by_ts == {
+        1785600000000: Decimal("9.99"),
+        1785600001234: Decimal("12.50"),
+    }
 
 
 def test_flushes_on_batch_age_before_reaching_the_size_threshold(

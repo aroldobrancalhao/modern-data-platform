@@ -21,6 +21,9 @@ from integrations.kafka.messaging.debezium_envelope import (
 )
 
 
+_SOURCE_TS_MS = 1785607968684
+
+
 def _envelope(
     *,
     op: str,
@@ -28,6 +31,7 @@ def _envelope(
     after: dict[str, Any] | None = None,
     before: dict[str, Any] | None = None,
     logical_types: dict[str, str] | None = None,
+    source_ts_ms: int = _SOURCE_TS_MS,
 ) -> bytes:
     logical_types = logical_types or {}
 
@@ -36,7 +40,10 @@ def _envelope(
         for name in (after or before or {})
     ]
 
-    payload: dict[str, Any] = {"op": op, "source": {"table": table}}
+    payload: dict[str, Any] = {
+        "op": op,
+        "source": {"table": table, "ts_ms": source_ts_ms},
+    }
 
     if after is not None:
         payload["after"] = after
@@ -73,6 +80,7 @@ def test_decodes_a_create_event_with_plain_scalar_columns() -> None:
         entity="orders",
         op="c",
         record={"id": "abc-123", "total": 42.5, "is_paid": True},
+        source_ts_ms=_SOURCE_TS_MS,
     )
 
 
@@ -113,6 +121,30 @@ def test_delete_event_falls_back_to_the_before_state() -> None:
 
     assert change.op == "d"
     assert change.record == {"id": "abc-123", "total": 42.5}
+    assert change.source_ts_ms == _SOURCE_TS_MS
+
+
+def test_snapshot_read_event_is_decoded_like_a_create_event() -> None:
+    # "r" (snapshot read) carries data via `after`, same shape as "c" --
+    # confirmed live against this project's own Debezium connector
+    # (Frente 3/CDC provenance investigation) that no op-based
+    # branching exists anywhere in the real decode/buffer path, so a
+    # forced re-snapshot (snapshot.mode) decodes no differently than
+    # ordinary inserts. This test pins that down structurally too, not
+    # just by reading the source.
+    message = _envelope(
+        op="r",
+        after={"id": "abc-123", "total": 42.5},
+    )
+
+    change = decode_debezium_message(message)
+
+    assert change == DebeziumChange(
+        entity="orders",
+        op="r",
+        record={"id": "abc-123", "total": 42.5},
+        source_ts_ms=_SOURCE_TS_MS,
+    )
 
 
 def test_neither_after_nor_before_yields_a_none_record() -> None:
@@ -123,7 +155,9 @@ def test_neither_after_nor_before_yields_a_none_record() -> None:
 
     change = decode_debezium_message(json.dumps(envelope).encode("utf-8"))
 
-    assert change == DebeziumChange(entity="orders", op="t", record=None)
+    assert change == DebeziumChange(
+        entity="orders", op="t", record=None, source_ts_ms=None
+    )
 
 
 def test_null_column_value_passes_through_as_none() -> None:

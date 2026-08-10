@@ -332,7 +332,15 @@ def run_bronze_consumer(
     state once it does.
     """
 
-    schemas = {entity: resolve_bronze_schema(entity) for entity in entities}
+    # include_cdc_metadata=True: this is the streaming path -- the one
+    # that actually needs `_cdc_ts_ms` for out-of-order CDC events (see
+    # resolve_bronze_schema's docstring). The batch flow
+    # (PostgresExtractionStage) calls resolve_bronze_schema without
+    # this flag, deliberately keeping its schema unchanged.
+    schemas = {
+        entity: resolve_bronze_schema(entity, include_cdc_metadata=True)
+        for entity in entities
+    }
 
     buffers = {entity: _EntityBuffer() for entity in entities}
 
@@ -485,7 +493,16 @@ def _buffer_message(
         return
 
     if change.record is not None:
-        buffer.add(change.record)
+        # _cdc_ts_ms: Debezium's payload.source.ts_ms (the Postgres WAL
+        # commit time), not the business `updated_at` column, which is
+        # proven unreliable for ordering (see the roadmap entry on the
+        # duplicate-row bug this resolves) -- a copy, not a mutation of
+        # change.record, since DebeziumChange doesn't own the dict's
+        # further lifecycle once returned.
+        record = dict(change.record)
+        record["_cdc_ts_ms"] = change.source_ts_ms
+
+        buffer.add(record)
 
 
 def _flush(

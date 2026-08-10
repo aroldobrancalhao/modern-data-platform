@@ -1295,6 +1295,50 @@ on disk -- it's meant to be generated locally by
 never version-controlled). Regenerating it locally after the `.gitignore`
 change confirmed it's correctly ignored going forward.
 
+## `products`' drain throughput plateaued mid-reprocess (~227-249 msg/min -> ~150 msg/min) -- real, sustained, not write-side, cause not fully identified
+
+Noticed while tracking the Frente 3 reprocess's own drain (not one of
+the 8 items committed this session -- a live observation during
+monitoring). `products` (the slowest-draining entity, the one that
+sets the realistic zero-ETA for all 16) held ~227-249 msg/min from
+~16:16 to ~16:47Z, then dropped to and stably held ~147-152 msg/min
+from ~16:47Z onward (confirmed via a 53-minute window, not a short
+noisy sample: `mdp_bronze_consumer_lag` at 17:49Z vs 18:42Z gives the
+same ~147/min the short samples around it show) -- a real, sustained
+step change, not measurement noise, and not still declining.
+
+**Ruled out, checked directly, not assumed**: write-side slowness or
+errors. Zero `mdp_bronze_write_failures_total` for `products` the
+entire container lifetime. `mdp_bronze_write_duration_seconds` sampled
+in a real live window (not the cumulative average) came back ~2.25s/
+write, faster than the cumulative average (~4.0s/write) -- if
+anything, writes got quicker, not slower, around the same time
+throughput dropped. `mdp_bronze_records_written_total` divides evenly
+by 100 throughout, confirming every flush is a full batch (size-
+triggered), not partial/age-triggered ones sneaking in.
+
+**Correlated in timing with 3 entities reaching zero lag, not
+confirmed as causal**: the deceleration window (~16:47-17:18Z) is
+exactly when `customers`, `order_items` and `customer_addresses` went
+from near-zero to zero (session's own progress reports: "6/16 zeradas"
+at ~16:47Z, "9/16 zeradas" at ~17:18Z) -- suggestive of some kind of
+round-robin/flush-pool reallocation effect among the remaining active
+entities as others drop out, the opposite direction from the naive
+"fewer entities competing for the 8-worker pool should mean *more*
+throughput for the ones left" expectation. Whether the freed capacity
+actually went to the other still-heavy entities (`inventories`,
+`inventory_movements`, `orders`, `order_status_history`) instead of
+`products` specifically was not confirmed -- would need reliable
+per-entity throughput numbers for all of them across the same window,
+not just `products`' (which is all that was reliably on hand at
+investigation time).
+
+**Not investigated further**: real finding, but not urgent -- writes
+are healthy, the container is stable, the reprocess keeps draining
+(just slower than the earlier rate for this one entity). Revisit if a
+similar step-change recurs and reliable multi-entity throughput
+history is available to check the reallocation hypothesis properly.
+
 ## `docker-compose.yml`'s working tree isn't just a staging area, it's what Compose reconciles live infra against -- found live, real (contained) side effect
 
 Found during the round-robin/init:true/credential-swap restart
@@ -1371,3 +1415,85 @@ face value -- cross-check against `kafka-consumer-groups --describe`
 (the real, broker-side number) before reacting to what looks like a
 regression. Not fixed or further investigated this session -- flagged
 so a future restart doesn't cause the same alarm.
+
+## Frente 3 (CDC provenance) close-out: the full 16-entity reprocess drained to zero, final validation done against real data before committing
+
+**Reprocess status, confirmed live via `kafka-consumer-groups --describe`
+(not the Prometheus metric -- see the entry above)**: aggregate lag
+reached and held at **0 across all 16 entities**, `mdp-kafka` stable
+at 768M, `bronze-consumer` healthy, no errors, for the remainder of
+this session after the round-robin tuning + init:true + credential-swap
+restart. This is the state the whole day's monitoring (livelock fix,
+IAM work, throughput tuning, the Kafka-recreate incident above) was
+building toward -- see this file's earlier entries for that history.
+
+**Schema, checked against every one of the 16 real streaming Bronze
+tables (`StorageConfig.bronze()`, not the batch table)**: `_cdc_ts_ms`
+(int64) present with zero nulls in all 16.
+
+**Row counts, real Bronze vs. real Postgres, all 16 entities** (Bronze
+is append-only CDC history, so counts exceeding Postgres's current
+live row count is expected by design, not itself a problem -- see this
+module's own docstring): the 8 entities that hit the commit-failure
+livelock earlier today (`payments`, `inventory_movements`,
+`order_status_history`, `reviews`, `shipments`, `products`, `orders`,
+`warehouses`) show a Bronze/Postgres ratio of ~1.86x-2.83x; the
+remaining 8 show ~1.0x-1.35x. This split lines up exactly with the
+livelock's own already-documented, already-fixed duplicate-on-retry
+mechanism (see "Bronze Consumer's commit-failure retry can livelock an
+entity permanently" above) -- an entity that hit the livelock re-wrote
+its already-committed-but-uncommitted batch once before the fix
+unblocked it, which is consistent with the roughly-2x-vs-roughly-1x
+split observed. Not a new issue, and expected going in (see the
+handoff prompt that opened this session).
+
+**A genuine outlier investigated, not waved off**: `categories` showed
+150,068 Bronze rows against only 10 live Postgres rows (a ~15,007x
+ratio, wildly outside every other entity's range) and only 5 distinct
+`_cdc_ts_ms` values for those 150,068 rows -- initially indistinguishable
+from a duplicate-write bug. Root-caused instead of assumed:
+- 150,055 of those rows share one `_cdc_ts_ms`
+  (`1785786209431`) and are a real Debezium `"d"` (delete) op, same
+  `txId` (`44128`) across a raw-Kafka sample -- i.e. one single bulk
+  DELETE transaction, and Debezium's `source.ts_ms` is the
+  transaction's commit time, legitimately shared by every row it
+  touched (not a retry artifact). `before.name` is empty/placeholder
+  on these rows -- `categories` isn't configured with `REPLICA IDENTITY
+  FULL`, so a delete's `before` image only carries the real primary key,
+  not the deleted row's actual prior content; a pre-existing,
+  orthogonal limitation, not something this session's work touched.
+- That transaction's 99,155 distinct `category_id`s match, almost
+  exactly, the historical bug this codebase already found and fixed
+  this month: commit `e726537` ("fix(simulator): stop categories from
+  growing without bound", 2026-08-03) -- `CategoryService.create_category()`
+  used to insert a brand-new `category_id` every cycle with no
+  dedup/unique constraint, confirmed in that commit's own message
+  against real data at the time ("134,207 rows, only 10 distinct
+  names"). This 5-`ts_ms` cluster is that bug's real cleanup: the mass
+  DELETE removing the accumulated duplicates, plus a small 10-row `"c"`
+  reseed batch (`ts_ms=1786216913652`, matching today's 10 live
+  category names exactly) and 3 singleton real updates. Bronze
+  faithfully recorded a real, large, legitimate transaction -- not a
+  bug in the Kafka/bronze-consumer/Bronze path.
+
+**`_deduplicate_by_key` validated against real data, not just synthetic
+unit tests**: pulled real multi-version Bronze rows for two actual
+`category_id`s (one with 4 genuine versions of "Fashion" at 4 distinct
+real timestamps, one with a single row) into a local Spark session and
+ran `apply_standard_transformations(df, natural_key_columns=["category_id"],
+order_column="cdc_ts_ms")` against them directly -- confirmed
+programmatically (not just visually) that it reduces to exactly one
+row per real key, keeping the one with the true maximum `_cdc_ts_ms`
+each time. No manual Bronze cleanup needed for `categories` or anything
+else -- the dedup step already resolves this exactly as designed once
+an entity is actually built from streaming Bronze (still no real
+caller does that yet, per `apply_standard_transformations`' own
+docstring).
+
+**Conclusion**: nothing found blocks this close-out commit. Every
+inflated count traces to either normal, documented Debezium snapshot
+behavior, the already-fixed simulator bug above, or the
+already-fixed-today livelock's own accepted duplicate-on-retry
+tradeoff -- and the dedup path meant to resolve all of it at the
+Silver layer is confirmed working against real data, not just
+synthetic fixtures.

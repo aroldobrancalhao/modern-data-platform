@@ -48,6 +48,17 @@ class DebeziumChange:
     do with each -- in particular "d", which this decoder still
     resolves to the row's last known state via ``before`` -- is a
     policy choice left to the caller, not this decoder.
+
+    ``source_ts_ms`` is Debezium's ``payload.source.ts_ms`` -- the
+    source database's own commit timestamp for this change (from the
+    Postgres WAL), not ``payload.ts_ms`` (when the Debezium connector
+    itself processed the event, a function of connector lag, not
+    source truth). Present for every op, "r" included (Debezium's
+    envelope always populates ``source.ts_ms``, structurally, not
+    conditionally on op -- confirmed against the real connector, not
+    assumed from the spec). ``None`` only alongside ``record is None``
+    (a tombstone with neither ``after`` nor ``before`` -- there is
+    nothing to timestamp).
     """
 
     entity: str
@@ -55,6 +66,8 @@ class DebeziumChange:
     op: str
 
     record: dict[str, Any] | None
+
+    source_ts_ms: int | None
 
 
 def decode_debezium_message(value: bytes) -> DebeziumChange:
@@ -85,7 +98,7 @@ def decode_debezium_message(value: bytes) -> DebeziumChange:
     elif before is not None:
         raw_record, field_name = before, "before"
     else:
-        return DebeziumChange(entity=entity, op=op, record=None)
+        return DebeziumChange(entity=entity, op=op, record=None, source_ts_ms=None)
 
     logical_types = _logical_types_for(schema, field_name)
 
@@ -94,7 +107,20 @@ def decode_debezium_message(value: bytes) -> DebeziumChange:
         for column, column_value in raw_record.items()
     }
 
-    return DebeziumChange(entity=entity, op=op, record=record)
+    # Direct access, not .get() -- source.ts_ms is a required field of
+    # every real Debezium envelope (this connector's own
+    # decimal.handling.mode/time.precision.mode choices don't affect
+    # it), same fail-loud policy as op/source.table above. A message
+    # missing it isn't a valid Debezium event -- callers already catch
+    # and skip malformed messages per-message (see bronze_consumer.py).
+    source_ts_ms = payload["source"]["ts_ms"]
+
+    return DebeziumChange(
+        entity=entity,
+        op=op,
+        record=record,
+        source_ts_ms=source_ts_ms,
+    )
 
 
 def _logical_types_for(

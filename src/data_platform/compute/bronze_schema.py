@@ -51,6 +51,8 @@ def resolve_bronze_schema(
     entity: str,
     schema_name: str = "marketplace",
     postgres_settings: PostgresSettings | None = None,
+    *,
+    include_cdc_metadata: bool = False,
 ) -> pa.Schema:
     """
     Builds the ``pa.Schema`` for ``entity`` from Postgres'
@@ -62,6 +64,21 @@ def resolve_bronze_schema(
     ``entity``) or a column type outside ``_DATA_TYPE_TO_ARROW`` (add
     it there once a real column needs it -- same policy as
     ``PostgresExtractionStage``).
+
+    ``include_cdc_metadata`` (default ``False``, keeping this module's
+    lockstep-with-``PostgresExtractionStage`` guarantee intact for
+    every existing caller) appends a synthetic ``_cdc_ts_ms`` (int64)
+    column -- Debezium's ``payload.source.ts_ms``, populated by
+    ``bronze_consumer.py`` (streaming), the only caller that passes
+    ``True``. This deliberately breaks batch/streaming schema parity
+    for the entities that opt in: the two paths write to separate
+    physical tables now (``.bronze()`` vs ``.bronze_batch()`` --
+    see ``StorageConfig``), so parity is no longer required for
+    correctness the way it was when they shared one table. See
+    docs/architecture/roadmap-next-steps.md for why this field exists
+    (CDC provenance -- resolving which of several conflicting Bronze
+    rows for the same key is actually the latest, since the business
+    ``updated_at`` column is proven unreliable for that).
     """
 
     settings = postgres_settings or PostgresSettings()
@@ -94,15 +111,18 @@ def resolve_bronze_schema(
             "the entity name."
         )
 
-    return pa.schema(
-        [
-            (
-                column_name,
-                _arrow_type(column_name, data_type, precision, scale),
-            )
-            for column_name, data_type, precision, scale in rows
-        ]
-    )
+    fields = [
+        (
+            column_name,
+            _arrow_type(column_name, data_type, precision, scale),
+        )
+        for column_name, data_type, precision, scale in rows
+    ]
+
+    if include_cdc_metadata:
+        fields.append(("_cdc_ts_ms", pa.int64()))
+
+    return pa.schema(fields)
 
 
 def coerce_record(record: dict[str, Any], schema: pa.Schema) -> dict[str, Any]:

@@ -80,3 +80,67 @@ def test_adds_processed_at_and_processing_date_columns(
     assert row is not None
     assert row["processed_at"] is not None
     assert row["processing_date"] is not None
+
+
+def test_without_natural_key_columns_conflicting_rows_for_the_same_key_survive(
+    spark: SparkSession,
+) -> None:
+    # Reproduces the real unique_dim_products_product_id bug this
+    # feature resolves: two rows, same key, NOT byte-identical (differ
+    # in category_id) -- dropDuplicates() alone (what
+    # _remove_duplicates does) cannot tell which one is stale, so both
+    # survive when natural_key_columns isn't opted into. Pins down the
+    # "existing callers keep their current behavior" guarantee, not
+    # just the new opt-in behavior below.
+    df = spark.createDataFrame(
+        [
+            Row(product_id="p1", category_id="old-cat", _cdc_ts_ms=100),
+            Row(product_id="p1", category_id="new-cat", _cdc_ts_ms=200),
+        ]
+    )
+
+    result = apply_standard_transformations(df)
+
+    assert result.count() == 2
+
+
+def test_natural_key_columns_keeps_only_the_row_with_the_highest_order_column(
+    spark: SparkSession,
+) -> None:
+    df = spark.createDataFrame(
+        [
+            Row(product_id="p1", category_id="old-cat", _cdc_ts_ms=100),
+            Row(product_id="p1", category_id="new-cat", _cdc_ts_ms=200),
+            Row(product_id="p2", category_id="only-cat", _cdc_ts_ms=150),
+        ]
+    )
+
+    result = apply_standard_transformations(
+        df, natural_key_columns=["product_id"]
+    )
+
+    rows = {row["product_id"]: row["category_id"] for row in result.collect()}
+
+    assert result.count() == 2
+    assert rows == {"p1": "new-cat", "p2": "only-cat"}
+
+
+def test_natural_key_columns_respects_a_custom_order_column(
+    spark: SparkSession,
+) -> None:
+    df = spark.createDataFrame(
+        [
+            Row(product_id="p1", category_id="old-cat", updated_at=100),
+            Row(product_id="p1", category_id="new-cat", updated_at=200),
+        ]
+    )
+
+    result = apply_standard_transformations(
+        df,
+        natural_key_columns=["product_id"],
+        order_column="updated_at",
+    )
+
+    row = result.first()
+    assert row is not None
+    assert row["category_id"] == "new-cat"

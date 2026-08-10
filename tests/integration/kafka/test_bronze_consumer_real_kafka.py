@@ -236,6 +236,13 @@ def test_postgres_change_flows_through_debezium_and_kafka_into_bronze(
         assert matching[0]["carrier_id"] == str(carrier_id)
         assert matching[0]["is_active"] is True
 
+        # Real Debezium/Kafka envelope, real resolve_bronze_schema()
+        # call (not monkeypatched, unlike the unit tests) -- proves
+        # _cdc_ts_ms round-trips end to end against real infra, not
+        # just a synthetic envelope.
+        assert isinstance(matching[0]["_cdc_ts_ms"], int)
+        assert matching[0]["_cdc_ts_ms"] > 0
+
     finally:
         with postgres_connection.cursor() as cursor:
             cursor.execute(
