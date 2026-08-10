@@ -1,0 +1,50 @@
+diff --git a/infrastructure/docker/docker-compose.yml b/infrastructure/docker/docker-compose.yml
+index 48ea316..b0b51dd 100644
+--- a/infrastructure/docker/docker-compose.yml
++++ b/infrastructure/docker/docker-compose.yml
+@@ -431,7 +431,44 @@ services:
+           # buffers) and OS page cache for log segments -- not sized
+           # from a formula, will be revisited if it OOMs under real
+           # backlog load.
+-          memory: 768M
++          #
++          # That revisit happened, 2026-08-10: a real cgroup OOM-kill
++          # of this container's own `java` process, confirmed live via
++          # `dmesg` (see docs/architecture/roadmap-next-steps.md,
++          # "Kafka broker was OOM-killed today") -- triggered the
++          # broker restart that disrupted the Frente 3 reprocess
++          # session's resume. RSS was already back up to ~528MiB
++          # (~69%) within a minute of that restart, and observed at
++          # 585MiB (~76%) again under the reprocess's steady load a
++          # few hours later -- consistent with 768M genuinely being
++          # tight for this workload, not a one-off fluke.
++          #
++          # PROPOSED, NOT DECIDED UNILATERALLY: raising to 1024M
++          # (the same relative first step bronze-consumer's own
++          # 512M->1024M->1536M history took, not a number picked in a
++          # vacuum) -- but unlike bronze-consumer's raises, this is
++          # NOT free headroom. Checked live before proposing any
++          # number (`free -h`, same session): host has only ~262MiB
++          # truly free, ~2.5GiB "available" (kernel's own reclaimable
++          # estimate), and swap already at ~3.7GiB/6GiB (62%) in use --
++          # this matches the still-open "Host RAM stays under real
++          # pressure with the full local stack running" roadmap entry
++          # (every container's *individual* ceiling already summed to
++          # ~13GB+ before this proposed change, against an 8GB+4GB-swap
++          # host budget). Raising this container's ceiling doesn't
++          # create new host RAM -- it lets Kafka claim more of an
++          # already-oversubscribed shared pool before ITS OWN cgroup
++          # OOM-kills it, which could just as easily show up as *more*
++          # swap thrashing or the kernel's host-level (not per-cgroup)
++          # OOM killer picking a different victim instead (this
++          # session's own `dmesg` capture from the same OOM event
++          # window also shows the host-level killer hitting `airflow`
++          # processes, not just this container). A real trade-off, not
++          # a clean fix -- needs an explicit decision on the number
++          # (or on addressing the aggregate host pressure first, e.g.
++          # the Compose-profile idea already recorded in that roadmap
++          # entry), not silently applied here.
++          memory: 1024M
+ 
+     networks:
+ 

@@ -1043,6 +1043,14 @@ the Compose-profile idea already recorded below, stopping
 non-essential services), not as a point fix to one container's limit
 picked in isolation.
 
+**Update, 2026-08-10 (later the same day)**: the drafted diff no
+longer lives in `docker-compose.yml`'s working tree -- see
+"`docker-compose.yml`'s working tree isn't just a staging area, it's
+what Compose reconciles live infra against" below for why, and
+`docs/architecture/deferred-patches/kafka-memory-limit-768-to-1024.patch`
+for the diff itself (unapplied, `git apply` when this is actually
+decided).
+
 ## `docker restart mdp-bronze-consumer` failed outright: container process was a zombie -- `--init` missing from the compose service
 
 Found live during the 2026-08-10 resume session's first remediation
@@ -1286,3 +1294,80 @@ on disk -- it's meant to be generated locally by
 `airflow/config/bootstrap/terraform.py` at container-bootstrap time,
 never version-controlled). Regenerating it locally after the `.gitignore`
 change confirmed it's correctly ignored going forward.
+
+## `docker-compose.yml`'s working tree isn't just a staging area, it's what Compose reconciles live infra against -- found live, real (contained) side effect
+
+Found during the round-robin/init:true/credential-swap restart
+(2026-08-10): a deferred, not-yet-decided diff (`mdp-kafka`'s memory
+limit, 768M -> 1024M -- see that entry above) had been left sitting,
+uncommitted, in `docker-compose.yml`'s working tree for safekeeping --
+the same pattern already used safely, repeatedly, for
+`roadmap-next-steps.md` and `test_bronze_consumer.py` earlier this
+same session (temporarily strip a pending hunk out for an isolated
+commit, restore it afterward). That pattern is safe for files nothing
+*reads at runtime* -- it broke here because `docker compose up`
+doesn't consult git at all; it diffs the live YAML file on disk
+against each running container's actual config. Running `docker
+compose up -d bronze-consumer` (only bronze-consumer named explicitly)
+still recreated `mdp-kafka` too, because Compose noticed `mdp-kafka`'s
+service definition in the file had drifted from the container
+actually running (768M live vs. 1024M in the file) and reconciled it
+as part of the same `up` invocation -- an unapproved, unintended
+change reaching real infra as a side effect of file hygiene, not a
+deploy command targeting Kafka.
+
+**Impact, checked, not assumed**: `mdp-kafka` recreated at the new
+1024M limit, ~54s of restart. `cluster.id` unchanged
+(`MkU3OEVBNTcwNTJENDM2Qk` before and after -- same cluster, not a
+fresh one), data volume (`docker_kafka_data`) intact, no errors in
+Kafka or Debezium logs across the restart window, `kafka-consumer-groups
+--describe`'s real per-partition offsets showed normal continued
+draining (not reset) once cross-checked. See the next entry for why
+the *Prometheus* lag metric looked far worse than this for a few
+minutes despite that. Reverted back to 768M the same session, once
+found -- see git history around this entry's timestamp.
+
+**New rule, going forward**: a deferred/not-yet-approved
+`docker-compose.yml` (or any Compose file) hunk does **not** get
+restored into the working tree while it stays pending, unlike
+docs/test files. It's kept instead as a standalone patch under
+`docs/architecture/deferred-patches/` (`git diff` output, `git apply`
+when actually decided) or pasted inline in its own roadmap entry --
+either way, never sitting in a file Compose itself reads to decide
+what to reconcile.
+
+## `mdp_bronze_consumer_lag` can read far higher than reality for a few minutes right after a consumer restart -- known limitation, not urgent
+
+Found during the same 2026-08-10 restart above: right after
+`bronze-consumer` came back up, the Prometheus metric showed
+dramatic-looking jumps (e.g. `orders` 14,107 -> 187,029, `products`
+116,915 -> 212,379) that read like a consumer-group offset reset --
+alarming enough to stop and investigate before touching anything else.
+Cross-checked against the authoritative source
+(`kafka-consumer-groups --describe`, which reads the broker's actual
+committed offsets) instead of trusting the exported metric: real lag
+was normal and continuing to drain (`orders` ~12,307, actually *lower*
+than the pre-restart baseline; `products` ~115,015, essentially flat)
+-- no reset, no reprocessing from scratch, no data loss.
+
+**Suspected mechanism (plausible, not proven to 100% -- accepted as
+such, not urgent to chase further)**: `KafkaMessagingProvider.consumer_lag()`
+(`src/integrations/kafka/messaging/kafka_messaging_provider.py`) calls
+`consumer.position(assignment)` and falls back to the partition's low
+watermark whenever a partition reports `OFFSET_INVALID` (its
+documented behavior for "never consumed from yet in this Consumer
+instance"). Right after a fresh process restart, before a newly
+recreated `Consumer`'s local position cache has synced with the
+group's real committed offset from the broker, `position()` can still
+return `OFFSET_INVALID` for a partition even though the broker itself
+already has a valid committed offset for it -- inflating the computed
+lag toward "as if starting from the beginning" until that first sync
+completes, typically within the first couple of poll cycles per
+entity.
+
+**Practical takeaway, not a fix**: for the first few minutes after any
+`bronze-consumer` restart, don't trust `mdp_bronze_consumer_lag` at
+face value -- cross-check against `kafka-consumer-groups --describe`
+(the real, broker-side number) before reacting to what looks like a
+regression. Not fixed or further investigated this session -- flagged
+so a future restart doesn't cause the same alarm.
