@@ -1013,6 +1013,23 @@ services:
       dockerfile: infrastructure/docker/streaming/Dockerfile
     container_name: mdp-bronze-consumer
     restart: unless-stopped
+    # Docker's own --init equivalent: without it, PID 1 inside the
+    # container is the Python process itself, not a real init (tini,
+    # which this flag wires in automatically) -- so it never reaps
+    # zombie child processes, and a signal PID 1 doesn't handle itself
+    # has nothing forwarding it. Found live, 2026-08-10: `docker
+    # restart mdp-bronze-consumer` failed outright with "container ...
+    # PID ... is zombie and can not be killed. Use the --init option
+    # ..." -- Docker eventually force-killed the container after its
+    # own internal retry/timeout, but it then sat stopped rather than
+    # recovering on its own (`restart: unless-stopped` doesn't cover
+    # this path -- the container wasn't "stopped" through that
+    # policy's own mechanism). See docs/architecture/
+    # roadmap-next-steps.md, "`docker restart mdp-bronze-consumer`
+    # failed outright: container process was a zombie". Low-risk,
+    # additive (a real init process, no behavior change to the app
+    # itself) -- included here rather than as a separate change.
+    init: true
     environment:
       PLATFORM_MESSAGING_PROVIDER: kafka
       KAFKA_BOOTSTRAP_SERVER: kafka:9092
@@ -1026,13 +1043,21 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # Personal terraform-admin key, explicitly -- NOT AWS_ACCESS_KEY_ID/
-      # SECRET (those now hold mdp-airflow-ingest-dev, scoped to raw/ only;
-      # this container writes bronze/, a different prefix, unrelated to
-      # that Airflow-specific credential split -- see
-      # roadmap-next-steps.md).
-      AWS_ACCESS_KEY_ID: ${MDP_PERSONAL_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${MDP_PERSONAL_SECRET_ACCESS_KEY}
+      # mdp-bronze-consumer-dev (Terraform: module.bronze_consumer,
+      # environments/dev/security.tf) -- dedicated, least-privilege:
+      # bronze/ S3 read-write only, no DeleteObject (append-only
+      # writer, never vacuums/compacts its own table -- see that
+      # module's own policy-document comment). Replaces the personal
+      # terraform-admin key (MDP_PERSONAL_ACCESS_KEY_ID/SECRET) this
+      # container used to share with dbt_run_gold/dbt_test_gold --
+      # see roadmap-next-steps.md's "Airflow's AWS credentials"
+      # remaining-work entry, and its own "Bronze Consumer's own AWS
+      # credential -- dedicated IAM" entry for this specific swap.
+      # NOT AWS_ACCESS_KEY_ID/SECRET either (those hold
+      # mdp-airflow-ingest-dev, scoped to raw/ only -- a different
+      # prefix, unrelated identity).
+      AWS_ACCESS_KEY_ID: ${MDP_BRONZE_CONSUMER_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${MDP_BRONZE_CONSUMER_SECRET_ACCESS_KEY}
       # write_deltalake() (the pure-Rust `deltalake` S3 client -- the
       # only place in this project that talks to S3 without boto3,
       # see bronze_consumer.py's module docstring) doesn't follow a
