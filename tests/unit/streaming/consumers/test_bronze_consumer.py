@@ -589,10 +589,24 @@ def test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure(
 
     provider.commit = flaky_commit  # type: ignore[method-assign]
 
+    # Needs more margin than the "+200" sibling tests in this file use
+    # for a single retry: this test has to observe *two* separate
+    # flushes complete (the first batch's failed-then-abandoned one,
+    # then the second batch's successful one) under real CPU
+    # contention, and the second one only fires via the fake clock's
+    # own age-based threshold (_MAX_BATCH_AGE_SECONDS=30, unpatched
+    # here unlike the real_kafka integration test), which alone needs
+    # ~30+ iterations before is_due() ever returns True for it.
+    # Confirmed flaky at "+200" when run as part of the full suite
+    # (CPU contention from ~450 other tests) even though it passed
+    # reliably in isolation every time -- same class of margin
+    # sensitivity already documented on
+    # test_batch_write_failure_leaves_offsets_uncommitted_and_retries
+    # above, just needing more headroom here for the extra flush cycle.
     run_bronze_consumer(
         provider,
         entities=("orders",),
-        max_iterations=batch_size + 200,
+        max_iterations=batch_size + 500,
     )
 
     table = DeltaTable(str(tmp_path / "orders")).to_pyarrow_table()
