@@ -122,9 +122,74 @@ _MAX_BATCH_SIZE = 100
 # rounds; this only bounds how much a single call can add at once.
 _MAX_POLL_BATCH_SIZE = 25
 
+# products and inventories are the two deepest-backlog entities in the
+# Frente 3 reprocess (119,915 and 56,022 messages remaining as of this
+# change, vs the next-largest at ~17,600) -- letting either one pull a
+# full _MAX_BATCH_SIZE (100) worth of messages in a single
+# consume_batch() call, instead of the default _MAX_POLL_BATCH_SIZE
+# (25), fills and flushes a buffer in one round-robin turn instead of
+# four, directly cutting the number of rounds needed to drain their
+# backlog. Every other entity keeps the default 25 cap -- most are
+# already at zero lag and would never use the extra room anyway.
+#
+# Memory headroom, checked live before applying (not assumed): current
+# steady RSS 616.8MiB / 1536MiB (40.1%), ~919MiB slack. This override
+# does not change _MAX_BATCH_SIZE (the flush threshold, and therefore
+# the per-flush write_deltalake() footprint already sized in
+# _FLUSH_POOL_SIZE's own comment) -- only how many rounds it takes to
+# fill the same 100-record buffer. The only real memory delta is
+# transient: up to (100-25)=75 extra raw Kafka message objects
+# in-flight per overridden entity in the worst case both are polled
+# the same round, i.e. 150 extra messages total vs the previous
+# all-25 ceiling. At the ~4.6KB/message figure measured for this same
+# workload (see the queued.max.messages.kbytes entry in
+# docs/architecture/roadmap-next-steps.md), that is ~690KB -- under
+# 0.1% of the current slack, nowhere near enough to threaten the
+# 1536MiB limit.
+_MAX_POLL_BATCH_SIZE_OVERRIDES: dict[str, int] = {
+    "products": 100,
+    "inventories": 100,
+}
+
 _MAX_BATCH_AGE_SECONDS = 30.0
 
-_POLL_TIMEOUT_SECONDS = 1.0
+# How long a single consume_batch() call blocks waiting for at least
+# one message before returning empty-handed. 1.0s was safe when every
+# entity had real backlog (consume_batch() returns almost instantly
+# once data is ready, regardless of this value -- the timeout only
+# matters for a genuinely empty poll), but as entities drain to zero
+# lag during the Frente 3 reprocess, more and more of them started
+# hitting this full 1.0s wait every single round-robin pass, directly
+# lengthening every round and starving still-backlogged entities
+# (confirmed live: mean round duration measured at 9.09s in a 3-minute
+# window vs a 4.71s lifetime average -- see
+# docs/architecture/roadmap-next-steps.md). 0.25s cuts that wasted
+# wait 4x without punishing entities with real backlog (their
+# consume_batch() calls are unaffected either way) -- not lower:
+# librdkafka still needs enough of a window for a live trickle event
+# to actually arrive and be returned within the same call, and going
+# much below ~0.2s starts trading "faster empty polls" for "genuinely
+# fresh events routinely needing an extra round to be picked up"
+# instead, which is not the problem being solved here.
+_POLL_TIMEOUT_SECONDS = 0.25
+
+# Once an entity's consume_batch() calls come back empty
+# _IDLE_AFTER_EMPTY_POLLS times in a row, it's treated as caught up
+# (not just a one-off timing blip -- a single empty poll is common and
+# not itself a signal of anything) and deprioritized: polled only
+# every _IDLE_POLL_EVERY_N_ROUNDS-th round instead of every round,
+# freeing the rounds in between for entities still in real backlog.
+# The moment an idle entity's poll turn does return a message, its
+# empty-poll streak resets to 0 and it's back to full-frequency
+# polling immediately -- this is a live, self-correcting
+# classification (see _EntityBuffer.consecutive_empty_polls), not a
+# static list. 3 is enough to rule out a single blip without being
+# slow to react; 5 (poll 1 round in 5) is a starting point, not a
+# formula result -- revisit either number if a future measurement
+# shows it under- or over-correcting.
+_IDLE_AFTER_EMPTY_POLLS = 3
+
+_IDLE_POLL_EVERY_N_ROUNDS = 5
 
 # Bounds how many entities can flush (write_deltalake() + commit())
 # concurrently -- see run_bronze_consumer()'s in_flight tracking,
@@ -186,6 +251,16 @@ class _EntityBuffer:
 
     opened_at: float | None = None
 
+    # Idle-round-skip bookkeeping (see _IDLE_AFTER_EMPTY_POLLS /
+    # _IDLE_POLL_EVERY_N_ROUNDS) -- unrelated to the buffered records
+    # themselves, kept here anyway since it shares the same
+    # one-per-entity lifetime and run_bronze_consumer already threads
+    # a `buffers` dict through its loop for exactly this kind of
+    # per-entity state.
+    consecutive_empty_polls: int = 0
+
+    rounds_since_last_poll: int = 0
+
     def add(self, record: dict[str, Any]) -> None:
         if self.opened_at is None:
             self.opened_at = time.monotonic()
@@ -237,6 +312,14 @@ def run_bronze_consumer(
     prefetch-buffer entry that follows it in
     docs/architecture/roadmap-next-steps.md for how ``_FLUSH_POOL_SIZE``
     was sized.
+
+    Each round-robin turn is also where two throughput adjustments
+    live (see their constants' own comments for the full rationale):
+    an entity is polled with a larger ``max_messages`` cap if it has a
+    ``_MAX_POLL_BATCH_SIZE_OVERRIDES`` entry, and an entity that has
+    come back empty ``_IDLE_AFTER_EMPTY_POLLS`` times in a row is
+    polled only every ``_IDLE_POLL_EVERY_N_ROUNDS``-th round instead of
+    every round, until it produces a message again.
 
     ``max_iterations`` bounds the number of round-robin cycles across
     all topics -- ``None`` (the default) runs forever, which is what
@@ -311,32 +394,66 @@ def run_bronze_consumer(
 
                         del in_flight[entity]
 
-                    # Caps the batch at whatever room is actually left
-                    # in this entity's buffer (so a single
-                    # consume_batch() call can't overshoot
-                    # _MAX_BATCH_SIZE) and at _MAX_POLL_BATCH_SIZE (so
-                    # it can't pull an OOM-sized burst in one call
-                    # either -- see that constant's own comment). If
-                    # the buffer is already full, skip polling this
-                    # entity entirely -- is_due() below will flush it
-                    # this same iteration, freeing capacity for the
-                    # next one.
-                    remaining = min(
-                        _MAX_BATCH_SIZE - len(buffer.records),
-                        _MAX_POLL_BATCH_SIZE,
+                    # Idle-round-skip (see _IDLE_AFTER_EMPTY_POLLS /
+                    # _IDLE_POLL_EVERY_N_ROUNDS): an entity that has
+                    # come back empty-handed enough times in a row only
+                    # gets its actual consume_batch() call once every
+                    # _IDLE_POLL_EVERY_N_ROUNDS rounds, freeing the
+                    # rounds in between for entities still in real
+                    # backlog. is_due() below still runs every round
+                    # regardless -- only the poll itself is skipped, so
+                    # a buffer with leftover records never waits longer
+                    # than it otherwise would to flush on age.
+                    idle = buffer.consecutive_empty_polls >= _IDLE_AFTER_EMPTY_POLLS
+
+                    skip_poll_this_round = (
+                        idle
+                        and buffer.rounds_since_last_poll
+                        < _IDLE_POLL_EVERY_N_ROUNDS - 1
                     )
 
-                    if remaining > 0:
-                        messages = provider.consume_batch(
-                            topic,
-                            group_id=_CONSUMER_GROUP_ID,
-                            max_messages=remaining,
-                            timeout_seconds=_POLL_TIMEOUT_SECONDS,
-                            auto_commit=False,
+                    if skip_poll_this_round:
+                        buffer.rounds_since_last_poll += 1
+                    else:
+                        buffer.rounds_since_last_poll = 0
+
+                        # Caps the batch at whatever room is actually
+                        # left in this entity's buffer (so a single
+                        # consume_batch() call can't overshoot
+                        # _MAX_BATCH_SIZE) and at this entity's
+                        # _MAX_POLL_BATCH_SIZE_OVERRIDES value if it has
+                        # one, else the default _MAX_POLL_BATCH_SIZE
+                        # (so it can't pull an OOM-sized burst in one
+                        # call either -- see that constant's own
+                        # comment). If the buffer is already full, skip
+                        # polling this entity entirely -- is_due()
+                        # below will flush it this same iteration,
+                        # freeing capacity for the next one.
+                        remaining = min(
+                            _MAX_BATCH_SIZE - len(buffer.records),
+                            _MAX_POLL_BATCH_SIZE_OVERRIDES.get(
+                                entity, _MAX_POLL_BATCH_SIZE
+                            ),
                         )
 
-                        for message in messages:
-                            _buffer_message(entity, topic, message.value, buffer)
+                        if remaining > 0:
+                            messages = provider.consume_batch(
+                                topic,
+                                group_id=_CONSUMER_GROUP_ID,
+                                max_messages=remaining,
+                                timeout_seconds=_POLL_TIMEOUT_SECONDS,
+                                auto_commit=False,
+                            )
+
+                            if messages:
+                                buffer.consecutive_empty_polls = 0
+
+                                for message in messages:
+                                    _buffer_message(
+                                        entity, topic, message.value, buffer
+                                    )
+                            else:
+                                buffer.consecutive_empty_polls += 1
 
                     if buffer.is_due(time.monotonic()):
                         in_flight[entity] = executor.submit(

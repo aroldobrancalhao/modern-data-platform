@@ -16,6 +16,7 @@ License: MIT
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,18 @@ class FakeMessagingProvider(MessagingProvider):
 
     rejoins: dict[tuple[str, str], int] = field(default_factory=dict)
 
+    simulate_poll_timeout: bool = False
+    """
+    When True, an empty consume_batch() call actually blocks for
+    ``timeout_seconds`` (a real ``time.sleep``) instead of returning
+    instantly -- mirrors real Kafka's poll semantics (a genuinely empty
+    topic blocks for the full timeout) closely enough for a test to
+    measure real wall-clock round-robin cost. False (the default) keeps
+    every other test's queue-draining tail instant, as before -- most
+    tests run hundreds of "iterations after the queue emptied" and
+    would take unacceptably long for a real per-call sleep otherwise.
+    """
+
     def enqueue(self, topic: str, group_id: str, value: bytes) -> None:
         self.queues.setdefault((topic, group_id), []).append(value)
 
@@ -108,6 +121,9 @@ class FakeMessagingProvider(MessagingProvider):
         queue = self.queues.get((topic, group_id))
 
         if not queue:
+            if self.simulate_poll_timeout:
+                time.sleep(timeout_seconds)
+
             return []
 
         batch, queue[:] = queue[:max_messages], queue[max_messages:]
@@ -618,3 +634,179 @@ def test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure(
     assert table.num_rows == batch_size + 50
     assert provider.rejoins[key] == 1
     assert provider.commits[key] == 1
+
+
+def test_poll_timeout_does_not_stall_the_round_on_an_empty_entity() -> None:
+    """
+    Regression test for the throughput regression documented in
+    docs/architecture/roadmap-next-steps.md ("products' drain
+    throughput plateaued..."): once an entity's topic is caught up (no
+    message ready), consume_batch() blocking for the full poll timeout
+    on every single round-robin pass lengthens every round, starving
+    entities still in real backlog of poll turns. Simulates a
+    genuinely empty topic (FakeMessagingProvider.simulate_poll_timeout
+    makes an empty consume_batch() actually block for
+    timeout_seconds, the same way a real empty Kafka poll does) and
+    asserts one full round over a single empty entity finishes well
+    under the *previous* 1.0s timeout -- proving the reduced
+    _POLL_TIMEOUT_SECONDS constant is what's actually driving the
+    wait, not just asserting its value directly.
+    """
+    provider = FakeMessagingProvider(simulate_poll_timeout=True)
+
+    started = time.monotonic()
+
+    run_bronze_consumer(provider, entities=("orders",), max_iterations=1)
+
+    elapsed = time.monotonic() - started
+
+    # 0.5s: comfortably above _POLL_TIMEOUT_SECONDS (0.25s, plus normal
+    # scheduling slack) and comfortably below the previous 1.0s value --
+    # if the timeout ever regresses back toward 1.0s this fails.
+    assert elapsed < 0.5, (
+        f"one round over a single empty entity took {elapsed:.3f}s -- "
+        "expected it to block for roughly _POLL_TIMEOUT_SECONDS "
+        f"({bronze_consumer._POLL_TIMEOUT_SECONDS}s), well under the "
+        "previous 1.0s poll timeout"
+    )
+
+
+def test_products_and_inventories_use_a_larger_per_poll_batch_cap(
+    tmp_path: Path,
+) -> None:
+    """
+    products and inventories are the two heaviest entities in the
+    Frente 3 reprocess backlog -- _MAX_POLL_BATCH_SIZE_OVERRIDES lets a
+    single consume_batch() call for either one pull up to a full
+    _MAX_BATCH_SIZE (100) worth of messages instead of the default 25,
+    so a deep backlog fills a flush-worthy buffer in one round-robin
+    turn instead of four. Every other entity keeps the default 25 cap
+    unchanged (see that constant's own comment for why 25, not more,
+    is still the right ceiling for entities without this override).
+    """
+    provider = FakeMessagingProvider()
+
+    for entity in ("products", "orders"):
+        topic = topic_for(entity)
+
+        for index in range(150):
+            provider.enqueue(
+                topic,
+                bronze_consumer._CONSUMER_GROUP_ID,
+                _envelope(entity, "c", {"id": f"{entity}-{index}", "amount": 1.0}),
+            )
+
+    run_bronze_consumer(
+        provider,
+        entities=("products", "orders"),
+        max_iterations=1,
+    )
+
+    # products: the override raises its cap to the full
+    # _MAX_BATCH_SIZE (100), so a single round both fills and flushes
+    # its buffer.
+    products_table = DeltaTable(str(tmp_path / "products")).to_pyarrow_table()
+    assert products_table.num_rows == bronze_consumer._MAX_BATCH_SIZE
+
+    # orders: no override, still capped at the default
+    # _MAX_POLL_BATCH_SIZE (25) per round -- nowhere near its own
+    # is_due() size threshold after a single round, so nothing is
+    # written yet.
+    assert not (tmp_path / "orders").exists()
+
+
+def test_zeroed_entity_is_deprioritized_but_never_permanently_starved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Proves both halves of the idle-round-skip design at once:
+    - a "heavy" entity (a message ready every single round, like
+      products/inventories in the real backlog) is polled every round,
+      never deprioritized;
+    - a "zeroed" entity (empty from the very first round, like the
+      growing set of caught-up entities in the Frente 3 reprocess) is
+      polled less often once idle, but is provably still checked
+      repeatedly, not abandoned -- consecutive_empty_polls /
+      rounds_since_last_poll are a live, self-correcting
+      classification, not a one-way switch.
+
+    Counts *actual* consume_batch() calls via a spy (not messages
+    consumed), since that's the exact thing being deprioritized -- a
+    skipped round never calls consume_batch() at all.
+
+    _MAX_BATCH_SIZE is patched to an unreachable size so orders' buffer
+    never crosses the flush threshold: a flush would submit its own
+    Future, and the "still in flight" branch skips that entity's turn
+    (including its consume_batch() call) for a round or two -- a real,
+    separate mechanic (see run_bronze_consumer's own comment on it) that
+    would otherwise confound this test's count of *idle-skip*-caused
+    skips specifically.
+    """
+    monkeypatch.setattr(bronze_consumer, "_MAX_BATCH_SIZE", 10**9)
+
+    provider = FakeMessagingProvider()
+
+    orders_topic = topic_for("orders")
+    payments_topic = topic_for("payments")
+
+    rounds = 20
+
+    # orders: enough backlog that a message is ready for every one of
+    # the `rounds` below (deep backlog, matches products/inventories'
+    # real-world shape) -- its consume_batch() calls never come back
+    # empty, so it never takes the idle path. Deliberately far more
+    # than rounds * _MAX_POLL_BATCH_SIZE (the most any single round can
+    # actually drain): consume_batch() pulls everything available up
+    # to that cap in one call, so an exactly-`rounds`-sized queue would
+    # drain in round 0 and go idle itself, defeating the point of this
+    # entity in the test.
+    for index in range(rounds * bronze_consumer._MAX_POLL_BATCH_SIZE * 2):
+        provider.enqueue(
+            orders_topic,
+            bronze_consumer._CONSUMER_GROUP_ID,
+            _envelope("orders", "c", {"id": f"order-{index}", "amount": 1.0}),
+        )
+
+    # payments: genuinely empty from round 0 (already fully drained) --
+    # every consume_batch() call for it returns [].
+
+    calls = {"orders": 0, "payments": 0}
+
+    real_consume_batch = provider.consume_batch
+
+    def spy_consume_batch(
+        topic: str,
+        group_id: str,
+        max_messages: int,
+        timeout_seconds: float = 1.0,
+        auto_commit: bool = True,
+    ) -> list[Message]:
+        if topic == orders_topic:
+            calls["orders"] += 1
+        elif topic == payments_topic:
+            calls["payments"] += 1
+
+        return real_consume_batch(
+            topic, group_id, max_messages, timeout_seconds, auto_commit
+        )
+
+    provider.consume_batch = spy_consume_batch  # type: ignore[method-assign]
+
+    run_bronze_consumer(
+        provider,
+        entities=("orders", "payments"),
+        max_iterations=rounds,
+    )
+
+    # Heavy entity: polled every single round, never deprioritized.
+    assert calls["orders"] == rounds
+
+    # Idle entity: deprioritized (strictly fewer polls than a full
+    # round-robin would give it) but not disabled outright, and
+    # checked more than once across the run -- not just abandoned
+    # after its first empty-streak threshold is crossed. Not asserted
+    # as an exact count on purpose: that would couple this test to
+    # _IDLE_AFTER_EMPTY_POLLS/_IDLE_POLL_EVERY_N_ROUNDS's precise
+    # values, which are a tunable starting point, not a contract.
+    assert 0 < calls["payments"] < rounds
+    assert calls["payments"] >= 3
