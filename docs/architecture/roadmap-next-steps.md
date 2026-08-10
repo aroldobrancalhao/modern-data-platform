@@ -388,7 +388,17 @@ needs updates from multiple sources reconciled. Not needed today --
 splitting the write paths removed the actual conflict at its root, for
 every entity, not just `products`.
 
-## Airflow's AWS credentials -- partially scoped this session, dbt and bronze-consumer still on the personal key
+## Airflow's AWS credentials -- partially scoped this session, dbt still on the personal key
+
+**Update, 2026-08-10, later the same session**: `bronze-consumer`'s own
+credential swap (mentioned as separate, uninvestigated remaining work
+below) is done -- a dedicated `mdp-bronze-consumer-dev` IAM User
+(Terraform `module.bronze_consumer`) replaces the personal key in
+`docker-compose.yml`, applied and confirmed live (S3 writes to
+`bronze/` succeeding continuously on the new identity). Only
+`dbt_run_gold`/`dbt_test_gold` (below) is still on the personal key.
+This entry's title and "Remaining work" section below are otherwise
+kept as originally written; only the bronze-consumer status changed.
 
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `infrastructure/docker/.env`
 used to be a direct copy of the `~/.aws/credentials [default]` profile
@@ -885,7 +895,22 @@ That entry's diff stays as a candidate for whenever this entry's
 "possible future action" is actually tackled, not as a standalone
 point fix.
 
-## Bronze Consumer's commit-failure retry can livelock an entity permanently -- found live during the Frente 3 full reprocess, not fixed
+## Bronze Consumer's commit-failure retry can livelock an entity permanently -- found live during the Frente 3 full reprocess, fixed later the same session
+
+**Update, 2026-08-10, later the same session**: fixed --
+`recover_from_lost_assignment()` (`KafkaMessagingProvider`, called from
+`_flush()`'s exception handler in `bronze_consumer.py`) discards and
+recreates the stuck consumer specifically on `_ASSIGNMENT_LOST`,
+clearing the buffer that was keeping `remaining > 0` shut. Both
+follow-ups from the "deliberately deferred" section below are done:
+item 1 (the livelock itself) via that fix; item 2 (duplicate rows
+already written) confirmed as no action needed -- see "Frente 3 (CDC
+provenance) close-out" further down this file, `_deduplicate_by_key`
+validated against real data. Regression test:
+`test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure`
+(`tests/unit/streaming/consumers/test_bronze_consumer.py`) -- confirmed
+failing without the fix, passing with it. The findings below are kept
+as-is (real, live investigation notes), not rewritten after the fact.
 
 **Found while monitoring the Frente 3 CDC-provenance reprocess's**
 drain: 8 of the 16 entities (`payments`, `inventory_movements`,
@@ -1051,7 +1076,16 @@ what Compose reconciles live infra against" below for why, and
 for the diff itself (unapplied, `git apply` when this is actually
 decided).
 
-## `docker restart mdp-bronze-consumer` failed outright: container process was a zombie -- `--init` missing from the compose service
+## `docker restart mdp-bronze-consumer` failed outright: container process was a zombie -- `--init` missing from the compose service, fixed later the same session
+
+**Update, 2026-08-10, later the same session**: fixed -- `init: true`
+added to the `bronze-consumer` service (`infrastructure/docker/
+docker-compose.yml`, commit bundled with the round-robin tuning +
+credential swap restart), confirmed live afterward via `docker inspect
+mdp-bronze-consumer --format '{{.HostConfig.Init}}'` returning `true`.
+The "Not fixed here" section below is kept as-is (the real reasoning
+for not applying it in that earlier moment), not rewritten after the
+fact.
 
 Found live during the 2026-08-10 resume session's first remediation
 attempt: `docker restart mdp-bronze-consumer` returned an error
@@ -1497,3 +1531,36 @@ already-fixed-today livelock's own accepted duplicate-on-retry
 tradeoff -- and the dedup path meant to resolve all of it at the
 Silver layer is confirmed working against real data, not just
 synthetic fixtures.
+
+## `Pipeline.__iter__`'s declared return type doesn't match what it actually yields -- found during this session's repo-wide mypy sweep, not fixed
+
+`uv run mypy src/data_platform/processing/core/pipeline.py`:
+
+```
+pipeline.py:97: error: Incompatible return value type
+  (got "Iterator[Stage | None]", expected "Iterator[Stage]")  [return-value]
+```
+
+`Pipeline.__iter__` is declared `-> Iterator[Stage]` but returns
+`self._flatten()`, whose real signature is `-> Iterator[Stage | None]`
+-- `_flatten()` can yield `None` (see its own docstring: "only
+`__post_init__`'s own validation loop ever sees that case"). In
+practice this is safe: `__post_init__` walks `_flatten()` once at
+construction time specifically to reject any `None` with a
+`ValueError` before the `Pipeline` object is ever handed back to a
+caller, so no `Pipeline` that survived construction can yield `None`
+on a later `__iter__()` call -- but that guarantee lives in
+`__post_init__`'s logic, not in `_flatten()`'s type signature, so
+mypy has no way to verify it and correctly flags the mismatch.
+
+**Not fixed**: found live during this session's repo-wide `ruff`/mypy
+sweep, alongside unrelated fixes; deliberately not touched then to
+keep that sweep's own commit scoped to what it was already doing.
+Options, not decided: (a) `# type: ignore[return-value]` on
+`__iter__` with a comment pointing at `__post_init__`'s invariant, (b)
+a private `_flatten_validated() -> Iterator[Stage]` that asserts
+non-`None` per item (turns a real-but-currently-impossible case into
+an explicit `AssertionError` instead of a silent type lie), or (c)
+give `_flatten()` two callers with different signatures instead of
+sharing one. No real behavior is wrong today -- this is a type-safety
+gap, not a runtime bug.
