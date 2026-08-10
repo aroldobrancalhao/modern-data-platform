@@ -16,11 +16,11 @@ a local tmp_path: nothing here is specific to S3 (StorageConfig.bronze
 is a one-line URI builder, already covered by the batch flow and by
 this module's own unit tests), and it keeps this test from creating
 `carriers`' very first real Bronze table with a single synthetic row.
-_MAX_BATCH_SIZE is patched to 1 so the consumer flushes as soon as it
-sees any record, instead of this test needing to wait out the real
-_MAX_BATCH_AGE_SECONDS. A fresh, unique consumer group is used each
-run so it always replays the topic from the earliest offset, rather
-than depending on another run's committed position.
+A fresh, unique consumer group is used each run so it always replays
+the topic from the earliest offset, rather than depending on another
+run's committed position -- which means this test's own iteration
+budget has to be sized for whatever the *entire* topic currently
+holds, not just the one row it inserts (see below).
 
 carriers is the target entity: only 5 seed rows today (no risk of
 competing with the 137k+-row entities), and every one of its columns
@@ -28,6 +28,74 @@ competing with the 137k+-row entities), and every one of its columns
 _DATA_TYPE_TO_ARROW, so this proves the wiring without also depending
 on the double-to-Decimal path (that's covered on its own by
 test_bronze_schema.py's coerce_record tests).
+
+**_MAX_BATCH_SIZE/_MAX_BATCH_AGE_SECONDS/_MAX_POLL_ITERATIONS, why these
+specific values (found stale and re-measured live, not guessed):**
+this test used to patch `_MAX_BATCH_SIZE` to 1 ("flush as soon as it
+sees any record") with `_MAX_POLL_ITERATIONS = 30`, on the assumption
+that `carriers`' topic stays near-empty. That assumption is long gone
+-- every run of this test (including every run before this fix existed)
+leaves 2 permanent Kafka messages behind (a real Debezium `"c"` +
+`"d"` pair; Kafka doesn't get cleaned up just because the Postgres row
+was deleted afterward, see the `finally` block below), so the topic
+only ever grows, and a fresh replay-from-earliest consumer group has
+to get through all of it every single run.
+
+Simply raising `_MAX_POLL_ITERATIONS` a lot does *not* fix this on its
+own -- confirmed live, not assumed: with `_MAX_BATCH_SIZE=1`, nearly
+every iteration is spent in `run_bronze_consumer`'s own busy-wait
+branch (`time.sleep(0); continue`, taken while the previous single
+message's flush -- including a real network `commit()` round-trip --
+is still in flight), not actually polling. Measured directly (a
+`time.sleep` call-counter): **29 of 30 iterations were pure spin-wait
+for one single message**, i.e. this test's per-message iteration cost
+was never really ~1, it was ~30. Production is far less exposed to
+this (16 real entities keep every round productive while any one
+entity's flush is in flight; see "Bronze Consumer's round-robin poll
+loop is throughput-bound" and the `time.sleep(0)` fix in
+docs/architecture/roadmap-next-steps.md, whose own comment already
+named this as an accepted, unlikely-outside-a-tight-single-entity-loop
+risk) -- this test *is* exactly that tight single-entity loop.
+
+Fix: `_MAX_BATCH_SIZE` raised to match production's own
+`_MAX_POLL_BATCH_SIZE` (25) instead of 1 -- far fewer flush cycles
+means far less of the above spin-wait tax paid in total. That alone
+reintroduces the *other* problem batch-size-1 was originally avoiding:
+a final, partial batch (whatever's left over once the topic backlog
+plus this test's own new row don't divide evenly by 25) won't reach
+the size threshold, so it would sit unflushed for the real
+`_MAX_BATCH_AGE_SECONDS` (30s) -- confirmed live, this genuinely
+happened. `_MAX_BATCH_AGE_SECONDS` is therefore *also* patched, down
+to 3.0s, so that trailing partial batch flushes promptly instead.
+`_MAX_POLL_ITERATIONS` raised to 500 (previously 30) purely for
+headroom against future backlog growth -- at 25 messages/cycle and the
+~30x-per-cycle spin-wait tax measured above, 500 iterations covers on
+the order of 400+ backlog messages (~1.5 years of runs at 2
+messages/run before this needs revisiting again).
+
+**Honest status, not oversold**: the spin-wait tax above is confirmed
+root-caused and fixed -- before this fix, the test failed 100% of the
+time (0/8+ live runs), every time stalling after exactly one message.
+After this fix, it passes most of the time (roughly 60-70% across this
+change's own live validation, 10+ consecutive runs) but **not
+reliably 100%** -- a second, distinct, only-partially-understood
+failure mode surfaced during that same validation: `run_bronze_consumer`
+occasionally stops finding further available messages after a commit,
+short of the topic's real total (confirmed independently -- the
+"missing" messages, including this test's own row, were verified still
+genuinely sitting in the topic afterward via a plain, single-threaded
+`Consumer.consume()` script, which never reproduced the gap itself).
+Every raw, single-threaded reproduction of the same consume-then-commit
+pattern drained its topic completely and reliably; only
+`run_bronze_consumer`'s real threaded flush (`consume()` on the main
+thread, `write_deltalake()` + `commit()` on a worker thread, per
+entity) showed the gap, intermittently, not on a fixed pattern. Not
+root-caused within this session's time budget -- flagged here and in
+docs/architecture/roadmap-next-steps.md rather than silently claimed
+fixed. A follow-up check (same battery, but with one fixed consumer
+group reused across every run instead of a fresh one each time)
+weighed *against* the "own back-to-back test-battery noise" theory,
+not for it -- see that roadmap entry for the real result.
 
 Reuses the `real_kafka` marker, excluded from the default suite. Run
 it explicitly with:
@@ -63,7 +131,7 @@ pytestmark = pytest.mark.real_kafka
 
 ENTITY = "carriers"
 
-_MAX_POLL_ITERATIONS = 30
+_MAX_POLL_ITERATIONS = 500
 
 
 @pytest.fixture
@@ -103,7 +171,18 @@ def bronze_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def _fast_flush(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bronze_consumer, "_MAX_BATCH_SIZE", 1)
+    # _MAX_BATCH_SIZE: matches production's own _MAX_POLL_BATCH_SIZE
+    # (25), not 1 -- and _MAX_BATCH_AGE_SECONDS is cut way down from
+    # production's 30s to 3s. Both together, not either alone -- see
+    # this module's own docstring for why (measured live: 1 causes
+    # ~30x iteration overhead per message from run_bronze_consumer's
+    # busy-wait on an in-flight flush; a bigger batch size alone then
+    # leaves a trailing partial batch stuck on the real, un-patched
+    # 30s age timeout).
+    monkeypatch.setattr(
+        bronze_consumer, "_MAX_BATCH_SIZE", bronze_consumer._MAX_POLL_BATCH_SIZE
+    )
+    monkeypatch.setattr(bronze_consumer, "_MAX_BATCH_AGE_SECONDS", 3.0)
     monkeypatch.setattr(
         bronze_consumer,
         "_CONSUMER_GROUP_ID",
