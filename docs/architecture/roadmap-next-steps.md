@@ -129,6 +129,28 @@ containers' `src:/opt/mdp/src` volume mount (see
 `docs/environment-inventory.md`) relies on the current flat-path
 behavior before changing it.
 
+**Update, 2026-08-10 -- explicitly revisited and deliberately deferred
+again, not forgotten**: come up again while other tech debt was being
+worked through during the Frente 3 reprocess wait. Still not done, for
+a sharper reason than "not urgent" this time: `bronze-consumer`'s
+image (`infrastructure/docker/streaming/Dockerfile`) `RUN uv sync
+--frozen ...` against this exact `uv.lock` on every build (see
+"`docker restart` on `bronze-consumer` silently keeps running the old
+code" earlier in this file -- that container already needs a rebuild,
+not just a restart, for any `src/` change to take effect). Changing
+`uv.lock` and bundling it into the same close-out restart that's
+already carrying the `init: true` fix and the dedicated-IAM credential
+swap would stack a lockfile change on top of infra that had a real
+incident today (the zombie-container restart failure) -- separating
+them isn't about the fix being risky, it's about not compounding an
+already-eventful restart with an unrelated change. **Condition to pick
+this back up**: the `[build-system]`/`pyproject.toml` diff can be
+written and validated (`uv sync`, confirm every `src/` package imports
+without `PYTHONPATH`) at any time -- it just shouldn't actually run
+`uv lock`/land in the shared lockfile until *after* Frente 3's
+close-out restart has happened and been confirmed stable, so it lands
+as its own clean change, not folded into that one.
+
 ## `marketplace_batch_pipeline` moved off `schedule=None` -- decision record
 
 The DAG's own docstring named the condition for this explicitly:
@@ -854,6 +876,371 @@ means no single container can run away unbounded anymore. The
 "possible future action" above is still the real fix for the
 aggregate problem.
 
+**Update, 2026-08-10**: this aggregate pressure is exactly why a
+drafted `mdp-kafka` memory-limit increase (see "Kafka broker was
+OOM-killed today", further down this file) was deliberately *not*
+applied this session -- `free -h` checked live again, essentially
+unchanged from the numbers above (~262MiB free, swap ~62% in use).
+That entry's diff stays as a candidate for whenever this entry's
+"possible future action" is actually tackled, not as a standalone
+point fix.
+
+## Bronze Consumer's commit-failure retry can livelock an entity permanently -- found live during the Frente 3 full reprocess, not fixed
+
+**Found while monitoring the Frente 3 CDC-provenance reprocess's**
+drain: 8 of the 16 entities (`payments`, `inventory_movements`,
+`order_status_history`, `reviews`, `shipments`, `products`, `orders`,
+`warehouses`) stopped making any progress at all -- not slow, *frozen*,
+while the other 8 kept draining normally. `mdp_bronze_consumer_lag`
+looked identical across two 30-minute checks for the frozen set, which
+is what surfaced it.
+
+**Mechanism, traced through the real code and confirmed live:**
+1. `_flush()`'s existing (pre-existing, predates this session) design
+   deliberately does *not* clear an entity's buffer when
+   `provider.commit()` fails (only `write_deltalake()` failing is
+   handled the same way) -- so the exact same buffered records retry
+   next cycle. Correct and intended for the ordinary case (write
+   landed, commit didn't).
+2. `run_bronze_consumer()`'s round-robin loop only calls
+   `provider.consume_batch()` (-> `Consumer.consume()`, the *only*
+   call that lets `confluent-kafka`/librdkafka actually process a
+   revoked-and-rejoin group-membership callback) when the entity's
+   buffer has room: `remaining = min(_MAX_BATCH_SIZE -
+   len(buffer.records), _MAX_POLL_BATCH_SIZE)`, gated by `if remaining
+   > 0`.
+3. Once a commit fails with `KafkaException{code=_ASSIGNMENT_LOST}`
+   (partition assignment revoked -- plausible and apparently common
+   under this reprocess's load: 16 entities' consumers, an 8-worker
+   flush pool, real queuing delays under a multi-million-message
+   backlog) **while the buffer happens to be exactly full**
+   (`_MAX_BATCH_SIZE`), `remaining` is permanently `0` from that point
+   on. `consume_batch()` -- the only thing that could let the consumer
+   rejoin the group -- is never called again for that entity. The
+   commit can therefore never succeed again, and the buffer can never
+   drop below full, either: a closed loop with no exit.
+4. Net effect confirmed live for `products` (container uptime
+   ~1h25min at the time of the check): **519 failed-flush cycles**,
+   **0** successful ones, real Postgres source `137,207` rows, but the
+   real Bronze Delta table already had **57,800 total rows for only
+   5,200 distinct `product_id`** -- `write_deltalake()` was
+   succeeding every cycle (only `commit()` was failing), so the same
+   small, stuck window of records was being re-appended as genuine
+   duplicates, dozens of times per minute, indefinitely -- not merely
+   idle.
+
+**Why this hasn't been seen before**: the retry design's own docstring
+already documents having seen `_ASSIGNMENT_LOST` live, as an accepted,
+presumed-transient edge case. It likely always *was* transient before
+-- a full buffer recovering within a round or two, before this reprocess
+put 16 entities' consumers and an 8-worker flush pool under sustained
+load extreme enough (a multi-million-message full-history catch-up,
+not steady-state trickle CDC) to turn a rare blip into a permanent,
+self-sustaining livelock for over half the entities at once.
+
+**Not this session's `_cdc_ts_ms` change** -- `_flush()`'s buffer/retry
+design and the round-robin loop's `remaining > 0` gate are both
+untouched by that diff; this is a correctness gap in code that
+predates it, only now exposed by exactly the kind of extreme backlog
+this reprocess intentionally created.
+
+**Remediated for now, root cause NOT fixed**: `docker restart
+mdp-bronze-consumer` -- confirmed live afterward that all 16 partitions
+rejoined the group and, specifically for the previously-stuck
+`products`, that its committed offset was genuinely advancing again
+(two `kafka-consumer-groups --describe` checks 25s apart, offset moved
+forward on 2 of 3 partitions) and that writes were succeeding again
+across all 16 entities, not just the previously-healthy 8. This clears
+the immediate blockage but does **not** fix the underlying bug -- the
+exact same load pattern could livelock the same or a different subset
+of entities again, and there's no automatic recovery if it does.
+
+**Two follow-ups this surfaces, both deliberately deferred, not
+implemented now:**
+1. **The livelock itself**: `_flush()`/the round-robin loop needs a
+   way to guarantee forward progress on a `_ASSIGNMENT_LOST` (or any
+   commit failure) even with a full buffer -- e.g. always calling
+   `consume_batch()` regardless of `remaining` (accepting the
+   over-`_MAX_BATCH_SIZE` risk this constant exists to avoid, or
+   handling it separately), or capping consecutive commit-failure
+   retries for an entity before forcing that entity's cached
+   `Consumer` to be discarded and recreated from scratch.
+2. **Duplicate rows already written**: the 8 affected entities' Bronze
+   Delta tables likely still contain meaningfully more duplicate rows
+   than the other 8 (only `products` was actually measured: ~11x
+   duplication on a ~5.2k-row stuck window) from the hours they spent
+   livelocked before the restart. Bronze already tolerates multiple
+   versions of the same row by design (`_deduplicate_by_key` exists
+   for exactly this in Silver), so this isn't a correctness problem
+   for any real consumer today (there still isn't one -- see the
+   entry above), just extra storage/scan cost sitting in these 8
+   tables until they're rebuilt or cleaned up.
+
+## Kafka broker was OOM-killed today, triggering the 2026-08-10 resume's disruption -- found, not fixed
+
+Found while diagnosing why a plain `docker restart mdp-bronze-consumer`
+(the resume session's first, reflexive remediation attempt) didn't
+cleanly restore throughput the way the original livelock entry's own
+remediation note predicted. Traced instead of assumed:
+
+- `mdp-kafka`'s container (`docker inspect .State.StartedAt`) had
+  actually restarted **today**, mid-session, independent of anything
+  this session did to it -- `2026-08-10T11:39:22Z`, while
+  `mdp-bronze-consumer` had been running continuously since
+  `2026-08-10T10:48:29Z` (no restart). Broker logs confirm a real
+  restart, not a network blip: `BrokerLifecycleManager` heartbeat
+  failures starting `11:34:41Z`, then a clean `Kafka Server started`
+  at `11:41:29Z`.
+- `dmesg` confirms the mechanism directly, not by inference: a real
+  cgroup OOM-kill of the broker's own `java` process --
+  `Memory cgroup out of memory: Killed process ... (java) ...
+  oom_memcg=.../850471351cb6...` -- `850471351cb6` is `mdp-kafka`'s
+  own container ID (confirmed via `docker stats`), not a different
+  service. `mdp-kafka`'s memory limit is `768MiB`
+  (`infrastructure/docker/docker-compose.yml`); live usage immediately
+  after the restart was already back up to `528MiB` (~69%), i.e.
+  little headroom under the load this reprocess generates.
+- Consequence for the consumer group: the broker restart forced every
+  one of `bronze-consumer`'s 16 per-entity `Consumer` instances to
+  rejoin the group at once (not just the ones already stuck in the
+  pre-existing livelock), which is why the resume session's `docker
+  restart mdp-bronze-consumer` produced a *worse*-looking initial
+  state (a `kafka-consumer-groups --describe` briefly reporting **no
+  active members at all**, zero successful flushes across all 16
+  entities for several minutes) than the original livelock entry's own
+  "restart cleared it in under a minute" experience -- that entry's
+  remediation was tested against a livelock with a *healthy* broker
+  underneath it; this time the broker itself needed to recover too.
+
+**Not fixed here**: raising `mdp-kafka`'s memory limit (mirroring the
+same live-measure-then-raise approach already used for
+`bronze-consumer` -- see "bronze-consumer's 1024M memory limit is
+tight under backlog catch-up" earlier in this file) is the obvious
+candidate fix, but wasn't sized or applied this session -- found and
+recorded as a real, evidenced root cause, not acted on unilaterally on
+live infra mid-reprocess.
+
+**Update -- a diff was drafted (768M -> 1024M,
+`infrastructure/docker/docker-compose.yml`'s `kafka` service,
+comment documents the reasoning and the trade-off in full), but a
+conscious decision was made not to apply it this session, and not to
+bundle it into Frente 3's close-out restart either.** Checked before
+deciding, not assumed: real host headroom right now (`free -h`) is
+~262MiB truly free, ~2.5GiB "available", swap already at ~3.7GiB/6GiB
+(62%) -- the same tight-host condition the "Host RAM stays under real
+pressure" entry below already names as still open. Raising this one
+container's ceiling doesn't create new host RAM; it just lets Kafka
+claim more of an already-oversubscribed shared pool, which could
+surface as swap thrashing or the kernel's host-level OOM killer
+picking a *different* victim instead (this session's own `dmesg`
+capture from the original OOM event window already shows exactly that
+-- `airflow` processes killed in the same window, not just
+`mdp-kafka`). No urgency justified deciding this mid-reprocess either:
+the broker has stayed healthy for ~5h since the one restart, with no
+recurrence. Left as a real, still-open candidate -- but for a session
+that deliberately tackles the *aggregate* host memory pressure (e.g.
+the Compose-profile idea already recorded below, stopping
+non-essential services), not as a point fix to one container's limit
+picked in isolation.
+
+## `docker restart mdp-bronze-consumer` failed outright: container process was a zombie -- `--init` missing from the compose service
+
+Found live during the 2026-08-10 resume session's first remediation
+attempt: `docker restart mdp-bronze-consumer` returned an error
+instead of restarting --
+`Cannot restart container ...: container ... PID ... is zombie and
+can not be killed. Use the --init option when creating containers to
+run an init inside the container that forwards signals and reaps
+processes`. Docker eventually forced the container to exit (`137`,
+i.e. `SIGKILL`) after its own internal retry/timeout, but it then sat
+**stopped** rather than coming back on its own -- `restart:
+unless-stopped` (`infrastructure/docker/docker-compose.yml`) does not
+cover this path, since the container wasn't "stopped" through that
+policy's own mechanism. A plain `docker start mdp-bronze-consumer` was
+needed to bring it back up manually.
+
+**Root cause, per Docker's own error message**: the `bronze-consumer`
+service in `infrastructure/docker/docker-compose.yml` has no `init:
+true` (or equivalent `--init`), so PID 1 inside the container is the
+Python process itself rather than a real init (e.g. `tini`, which
+Docker's `--init` flag wires in automatically) -- without one, PID 1
+never reaps zombie child processes, and a signal sent to PID 1 that it
+doesn't handle itself has nothing forwarding it appropriately either.
+Not confirmed which specific child process this session's zombie was
+(not investigated further -- out of scope for a resume session focused
+on the reprocess itself).
+
+**Not fixed here**: adding `init: true` to the `bronze-consumer`
+service (Compose's native, one-line equivalent of `docker run --init`)
+is the obvious fix and low-risk, but wasn't applied to
+`infrastructure/docker/docker-compose.yml` this session -- found and
+recorded, not changed on live infra mid-reprocess without a separate,
+explicit go-ahead.
+
+## `docker restart` on `bronze-consumer` silently keeps running the old code -- a plain restart is not a deploy for this service
+
+Found while applying the livelock fix (two entries above) this same
+session: `bronze-consumer`'s image (`infrastructure/docker/streaming/
+Dockerfile`) `COPY`s `src/` in at *build* time -- unlike Airflow's
+containers, which mount `src:/opt/mdp/src` live (see
+`docs/environment-inventory.md`) -- so there is no volume carrying
+source changes into the running container.
+`docker restart mdp-bronze-consumer` (or the container recovering on
+its own via `restart: unless-stopped`) reruns the exact same image,
+i.e. the exact same code that was already running, silently -- no
+error, no warning, a healthy container, just still the old binary.
+The correct deploy sequence for any `src/` change is `docker compose
+build bronze-consumer && docker compose up -d bronze-consumer`
+(rebuild, then recreate), not a bare restart -- confirmed live this
+session: the livelock fix only took effect once done this way.
+
+**Update -- confirmed, not just assumed**: applies to swapping
+`bronze-consumer`'s AWS credential now that `mdp-bronze-consumer-dev`
+(dedicated IAM, see the next entry) is applied. Re-read
+`docker-compose.yml`'s `bronze-consumer` block specifically for this:
+it's an environment-variable change only (the `AWS_ACCESS_KEY_ID`/
+`AWS_SECRET_ACCESS_KEY` lines), matching the existing `AWS_REGION`/
+`AWS_DEFAULT_REGION` precedent already in that same block ("no image
+rebuild needed since it's config-only") -- **recreate only**
+(`docker compose up -d bronze-consumer`), no `build` needed. The
+compose diff itself (pointing at `MDP_BRONZE_CONSUMER_ACCESS_KEY_ID`/
+`SECRET` instead of `MDP_PERSONAL_*`) and the matching
+`.env.example` entry are both written and ready -- deliberately
+**not rolled out yet** (`MDP_BRONZE_CONSUMER_*` left blank in the real
+`.env`, container still running on the personal key): the container
+already restarted twice today (one of them the zombie-PID incident
+above), and the decision was to bundle this credential swap into
+Frente 3's close-out restart instead of a third one now without a real
+need -- see that section's own entry for status.
+
+## `test_bronze_consumer_real_kafka.py`'s stale-topic-assumption bug -- fixed (spin-wait tax)
+
+First flagged as an "explicitly left out of scope" finding during the
+Frente 3 CDC-provenance work (this test's own `carriers`-topic-is-
+near-empty docstring assumption was already stale then). Investigated
+for real this session (ran the test live, repeatedly, against real
+Kafka/Postgres/Debezium -- not assumed from reading the code).
+
+**Root cause, confirmed live, not the originally-guessed one**: it's
+not really "the topic got too big for a 30-iteration budget" (though
+the topic *is* permanently growing -- every run leaves 2 Kafka messages
+behind forever, Postgres cleanup doesn't touch Kafka). The real cost is
+structural: with `_MAX_BATCH_SIZE` patched to 1, `run_bronze_consumer`'s
+round-robin loop spends nearly its entire iteration budget in its own
+busy-wait branch (`time.sleep(0); continue`, taken while the one single
+message's flush -- including a real network `commit()` -- is still in
+flight on a worker thread), not actually polling. Measured directly
+with a `time.sleep` call-counter: **29 of 30 iterations were pure
+spin-wait for a single message**. This is exactly the risk this same
+loop's own code comment already named (see "Item 2 (parallelize
+flushes) implemented" above, the `time.sleep(0)` fix and its comment
+about "a tight single-entity test loop") -- confirmed here as a real
+instance of it, in a different test than the one that comment was
+originally about.
+
+**Fixed**: `_MAX_BATCH_SIZE` raised to match production's own
+`_MAX_POLL_BATCH_SIZE` (25, not 1) -- far fewer flush cycles, far less
+spin-wait tax paid overall. `_MAX_BATCH_AGE_SECONDS` patched down to
+3.0s (from production's 30s) so a trailing partial batch (whatever
+doesn't divide evenly into 25) still flushes promptly instead of
+sitting for a real 30s. `_MAX_POLL_ITERATIONS` raised 30 -> 500 for
+headroom against the topic's permanent growth. This part is done --
+before this fix, the test failed 100% of the time (0/8+ live runs),
+every time stalling after exactly one message. See the next entry for
+what's still open.
+
+## `run_bronze_consumer` sometimes doesn't find messages that are genuinely sitting in the topic -- symptom documented, root cause NOT found, own-noise hypothesis tested and weakened
+
+Found live while validating the fix above, in the same session -- kept
+as its own entry (not just a footnote on that fix) because it's a
+different, still-open question: **does `run_bronze_consumer` itself
+have a real bug**, separate from anything the fix above touched.
+
+**Symptom**: after the spin-wait fix, the test passes most of the time
+but not reliably -- **roughly 60-70% across 10+ consecutive live runs**
+this session. Every failure has the same shape: `run_bronze_consumer`
+stops finding further messages part-way through, short of the topic's
+real total, and never resumes within its iteration budget. Confirmed
+this isn't "the message never arrived" -- for a failed run, the
+"missing" messages (including the test's own inserted row) were
+independently verified still genuinely present in the topic afterward,
+via a separate plain `Consumer.consume()` script pointed at the same
+topic. Debezium's own produce latency was also measured directly
+(seek-to-tail, then insert: a consistent ~0.2s) and ruled out -- far
+too fast to explain the gap.
+
+**What's been ruled OUT, not just suspected**: every raw,
+single-threaded reproduction of the same consume-then-commit pattern
+(same client config, same batch size, committing after every batch, in
+a plain loop with no `run_bronze_consumer` involved) drained its topic
+completely and reliably, repeatedly. Only `run_bronze_consumer`'s real
+control flow -- `consume_batch()` on the main thread, `write_deltalake()`
++ `commit()` on a worker thread via `ThreadPoolExecutor`, gated by the
+`in_flight` per-entity tracking -- ever showed the gap, and not on any
+fixed pattern (different attempt counts, different total messages
+written each time it happened).
+
+**Hypothesis tested this session, weakened by the result -- own
+test-battery noise (many back-to-back real-Kafka runs, each spinning
+up and abandoning a fresh consumer group against the same broker
+within seconds of the last, causing broker-side rebalance churn
+distinct from normal usage)**: checked by re-running the same battery
+with one **fixed** consumer group reused across every run instead of a
+fresh one each time -- if the gap were purely this session's own rapid
+group churn, consolidating to one group should have reduced or removed
+it. It didn't: the fixed-group runs were **not better, and looked
+worse** (multiple runs hung/timed out rather than failing cleanly,
+across two separate batches of ~5 attempts each). This doesn't prove
+the noise hypothesis wrong (the sample is small, and a single
+long-lived group being hammered by rapid rejoin/leave cycles from
+repeated pytest invocations is its own kind of load, not a clean
+control), but it does not support it either, and reusing a group made
+an already-intermittent symptom look less predictable, not more
+stable -- worth knowing before anyone re-reaches for "just use one
+group" as the fix.
+
+**Explicitly checked and ruled out: this is not the same mechanism as
+the Bronze Consumer livelock fix from earlier in this same session
+(`MessagingProvider.recover_from_lost_assignment()`, triggered on
+Kafka's `_ASSIGNMENT_LOST`).** The second fixed-group-id batch (5 runs,
+full `-v -s` output captured and kept, not just a pass/fail tally)
+was grepped directly for that mechanism's own log line ("lost its
+Kafka group assignment"), the raw `_ASSIGNMENT_LOST`/`NOT_COORDINATOR`
+error codes, and any `error`/`warning`-level log line at all: **zero
+matches across all 5 runs**, including the one that failed cleanly and
+the four that hung. Whatever stalls `run_bronze_consumer` here, it is
+not going through a caught commit-failure exception at all (the
+existing `except Exception` in `_flush()` would have logged
+*something* -- either the new WARNING or the old "flush failed"
+error) -- `consume_batch()` itself is just returning nothing, silently,
+which is consistent with the "distinct failure mode" framing above and
+rules out "it's actually today's fix's own bug/edge case" as an
+explanation.
+
+**What's needed to actually distinguish self-inflicted load from a
+real `run_bronze_consumer` bug, not done yet**:
+1. Run the test in true isolation -- a single invocation, by itself,
+   with real idle time before and after (not back-to-back with
+   anything else touching Kafka), repeated on separate occasions (e.g.
+   once per day over a week) rather than in a tight loop. A failure
+   under that pattern would be strong evidence of a real bug.
+2. Instrument `run_bronze_consumer` itself (not a reproduction outside
+   it) during a real failure -- e.g., a temporary `stats_cb` or debug
+   log around the `consume_batch()` call and `in_flight` state --
+   captured *during* a failing run, not inferred afterward. Every
+   diagnosis so far has been from reproductions or post-hoc checks,
+   never a direct look inside the real failing call.
+3. Check whether the gap correlates with a flush actually being
+   in-flight at the moment consumption stalls (i.e. is this a
+   resurfacing of the same "busy-wait starves consume_batch()" family
+   as the fix above and the original Bronze Consumer livelock, just
+   not needing the buffer to be literally full to trigger) or is
+   unrelated to threading entirely.
+
+**Not blocking**: streaming Bronze (the Frente 3 CDC-provenance work)
+has no real downstream consumer yet, and this is one `real_kafka`-
+marked integration test, excluded from the default suite. Revisit when
+there's time for #1-3 above, not urgently.
 
 ## `airflow/config/terraform_outputs.json` was one `export-terraform-outputs.sh` run away from leaking real AWS secret keys into git history -- fixed
 
