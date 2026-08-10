@@ -683,3 +683,248 @@ module "bronze_consumer" {
 
   tags = local.default_tags
 }
+
+##########################################################
+# dbt (Gold build) IAM User
+##########################################################
+#
+# Closes the "remaining work" item named in airflow_ingest's own
+# policy-document comment above: dbt_run_gold/dbt_test_gold
+# (marketplace_batch_pipeline.py's BashOperator, env-overridden onto
+# MDP_PERSONAL_ACCESS_KEY_ID/SECRET, see that DAG) are still on the
+# personal terraform-admin key. Scope mirrors that comment exactly --
+# Athena mdp-athena-dbt-dev, Glue read mdp_silver_dev / write
+# mdp_gold_dev, S3 read silver/ / write gold/ -- derived from what
+# `dbt run --target dbt_build --select gold` + `dbt test` actually do
+# (dbt/models/gold/*.sql ref() the stg_* Silver models directly, and
+# CTAS-builds/replaces the Gold tables), not assumed.
+data "aws_iam_policy_document" "dbt_gold" {
+
+  statement {
+
+    sid = "AthenaDbtBuild"
+
+    effect = "Allow"
+
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:StopQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:GetQueryResultsStream",
+      "athena:ListQueryExecutions",
+      "athena:GetWorkGroup"
+    ]
+
+    resources = [
+      module.athena_dbt_build.workgroup_arn
+    ]
+  }
+
+  statement {
+
+    sid = "AthenaListDataCatalogs"
+
+    effect = "Allow"
+
+    actions = [
+      "athena:ListDataCatalogs"
+    ]
+
+    # Same as bi_reader's identical statement -- account-wide
+    # enumeration action, no ARN it can be scoped to (per AWS's own
+    # Athena action reference), returns only data catalog *names*.
+    resources = ["*"]
+  }
+
+  statement {
+
+    sid = "AthenaListDatabasesAndTables"
+
+    effect = "Allow"
+
+    actions = [
+      "athena:ListDatabases",
+      "athena:GetDatabase",
+      "athena:ListTableMetadata",
+      "athena:GetTableMetadata"
+    ]
+
+    resources = [
+      "arn:aws:athena:${var.aws_region}:${var.account_id}:datacatalog/AwsDataCatalog"
+    ]
+  }
+
+  statement {
+
+    sid = "GlueCatalogReadSilver"
+
+    effect = "Allow"
+
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetDatabases",
+      "glue:GetTable",
+      "glue:GetTables",
+      "glue:GetPartition",
+      "glue:GetPartitions",
+      "glue:BatchGetPartition"
+    ]
+
+    resources = [
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${module.glue_silver.database_name}",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${module.glue_silver.database_name}/*"
+    ]
+  }
+
+  statement {
+
+    sid = "GlueCatalogWriteGold"
+
+    effect = "Allow"
+
+    actions = [
+      # Read side (needed even for a writer -- dbt's adapter checks
+      # existing table/schema state before CTAS-replacing it) plus the
+      # DDL/partition-management actions dbt-athena's create_table_as
+      # macro and --full-refresh's drop+recreate path actually issue.
+      "glue:GetDatabase",
+      "glue:GetDatabases",
+      "glue:GetTable",
+      "glue:GetTables",
+      "glue:CreateTable",
+      "glue:UpdateTable",
+      "glue:DeleteTable",
+      "glue:GetPartition",
+      "glue:GetPartitions",
+      "glue:BatchGetPartition",
+      "glue:BatchCreatePartition",
+      "glue:BatchDeletePartition"
+    ]
+
+    resources = [
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${module.glue_gold.database_name}",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${module.glue_gold.database_name}/*"
+    ]
+  }
+
+  statement {
+
+    sid = "S3ListSilverAndGold"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      module.datalake.bucket_arn
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["silver/*", "gold/*"]
+    }
+  }
+
+  statement {
+
+    sid = "S3ReadSilver"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject"
+    ]
+
+    resources = [
+      "${module.datalake.bucket_arn}/silver/*"
+    ]
+  }
+
+  statement {
+
+    sid = "S3ReadWriteGold"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      # Unlike bronze_consumer's append-only grant, DeleteObject is
+      # real here: --full-refresh's drop+recreate (see the Gold
+      # CTAS-location roadmap entry, "a rebuild genuinely overwrites
+      # in place again") needs to clear old data files under a Gold
+      # table's location before/while writing the replacement.
+      "s3:DeleteObject"
+    ]
+
+    resources = [
+      "${module.datalake.bucket_arn}/gold/*"
+    ]
+  }
+
+  statement {
+
+    sid = "AthenaDbtStagingBucketMetadata"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
+    ]
+
+    resources = [
+      module.athena_staging.bucket_arn
+    ]
+
+    # Bucket-level, unconditioned, same reasoning as bi_reader's
+    # identical statement -- the Athena JDBC/ODBC connection-test path
+    # (HeadBucket/GetBucketLocation) carries no s3:prefix, so a prefix
+    # condition can never match it.
+  }
+
+  statement {
+
+    sid = "S3AthenaDbtQueryStaging"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListMultipartUploadParts",
+      "s3:AbortMultipartUpload"
+    ]
+
+    # Scoped to dbt-build/* specifically, not the whole staging
+    # bucket like bi_reader's equivalent grant -- module.athena_dbt_build
+    # sets results_prefix = "dbt-build/" (analytics.tf), a dedicated
+    # sub-path within the shared staging bucket, unlike mdp-athena-dev's
+    # results_prefix = "" (bucket root) that bi_reader legitimately
+    # needs full-bucket access for.
+    resources = [
+      "${module.athena_staging.bucket_arn}/dbt-build/*"
+    ]
+  }
+}
+
+module "dbt_gold" {
+
+  source = "../../modules/security/iam_user"
+
+  user_name = "mdp-dbt-gold-dev"
+
+  policy_name = "mdp-dbt-gold-policy-dev"
+
+  description = "Scoped access for dbt's own AWS credential (dbt_run_gold/dbt_test_gold): mdp-athena-dbt-dev workgroup, Glue read on mdp_silver_dev, Glue write on mdp_gold_dev, S3 read silver/ + read-write gold/. Not yet wired into airflow/dags/marketplace_batch_pipeline.py -- those tasks still override onto MDP_PERSONAL_ACCESS_KEY_ID/SECRET, see roadmap-next-steps.md."
+
+  policy = data.aws_iam_policy_document.dbt_gold.json
+
+  tags = local.default_tags
+}
