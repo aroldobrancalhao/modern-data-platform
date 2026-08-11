@@ -129,6 +129,15 @@ x-airflow-common:
     MDP_DBT_GOLD_ACCESS_KEY_ID: ${MDP_DBT_GOLD_ACCESS_KEY_ID}
     MDP_DBT_GOLD_SECRET_ACCESS_KEY: ${MDP_DBT_GOLD_SECRET_ACCESS_KEY}
 
+    # mdp-bronze-maintenance-dev (Terraform module.bronze_maintenance,
+    # environments/dev/security.tf) -- dedicated, least-privilege
+    # credential for bronze_streaming_maintenance.py's optimize_bronze/
+    # vacuum_bronze tasks: bronze/ S3 list/get/put/delete, deliberately
+    # separate from bronze_consumer's own append-only (no delete)
+    # credential above -- see that policy document's own comment.
+    MDP_BRONZE_MAINTENANCE_ACCESS_KEY_ID: ${MDP_BRONZE_MAINTENANCE_ACCESS_KEY_ID}
+    MDP_BRONZE_MAINTENANCE_SECRET_ACCESS_KEY: ${MDP_BRONZE_MAINTENANCE_SECRET_ACCESS_KEY}
+
     # Dedicated Databricks PAT (comment "airflow-orchestration"), not
     # the personal OAuth session in ~/.databrickscfg -- read into the
     # databricks_default Connection's host/password.
