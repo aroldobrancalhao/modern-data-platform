@@ -1213,6 +1213,14 @@ services:
     image: grafana/grafana:13.1.2
     container_name: mdp-grafana
     restart: unless-stopped
+    # Same zombie-PID-1 issue already documented and fixed for
+    # bronze-consumer (docs/architecture/roadmap-next-steps.md) hit
+    # live here too, first time this container ever needed a real
+    # restart in this session: `docker compose restart grafana` failed
+    # outright with "container ... is zombie and can not be killed".
+    # Same fix, same reasoning -- a real init process (tini), low-risk
+    # and additive, no behavior change to Grafana itself.
+    init: true
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:

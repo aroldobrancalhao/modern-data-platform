@@ -1,9 +1,24 @@
 # Modern Data Platform
 #
 # Auto-provisions the Prometheus datasource on Grafana startup -- no
-# manual "Add data source" click-through needed. No dashboards
-# provisioned yet (Sprint 13, Decision 4): deliberately deferred until
-# there's real data flowing to build one against.
+# manual "Add data source" click-through needed.
+#
+# Tried pinning an explicit `uid: prometheus` here (Sprint 13
+# close-out, part 2), so the dashboard JSON could reference a fixed,
+# reproducible id -- broke Grafana startup outright ("Datasource
+# provisioning error: data source not found", the whole provisioning
+# module failed to start) against this real, already-running instance:
+# grafana_data is a persistent volume, and this datasource was already
+# created weeks ago (Decision 4) under Grafana's own auto-generated
+# uid -- provisioning can't rename an existing datasource's uid via
+# this file, confirmed live, not assumed. Reverted. The dashboard JSON
+# instead hardcodes the real uid already assigned to this instance's
+# "Prometheus" datasource (read via `GET /api/datasources` once
+# Grafana was healthy again) -- accurate to what actually exists,
+# rather than fighting Grafana's provisioning semantics for a
+# reproducibility nicety a fresh `docker compose up` (empty volume)
+# would get automatically anyway, since in that case there's no
+# pre-existing datasource row to conflict with.
 
 apiVersion: 1
 

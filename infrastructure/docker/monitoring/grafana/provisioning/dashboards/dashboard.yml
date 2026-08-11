@@ -1,0 +1,23 @@
+# Modern Data Platform
+#
+# Dashboard provider config (Sprint 13 close-out, part 2) -- points
+# Grafana at ./json for dashboard JSON files, same "config as code"
+# discipline already used for the Metabase dashboard (dashboards/
+# metabase/*.sql, not built through the UI either). allowUiUpdates:
+# false so an in-UI edit doesn't silently diverge from the tracked
+# JSON -- the JSON file is the source of truth, same reasoning as
+# dashboards/metabase/README.md's own "SQL files instead of Metabase's
+# own export".
+
+apiVersion: 1
+
+providers:
+  - name: default
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

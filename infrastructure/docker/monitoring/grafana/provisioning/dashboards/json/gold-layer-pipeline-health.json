@@ -1,0 +1,257 @@
+{
+  "id": null,
+  "uid": "mdp-pipeline-health",
+  "title": "Pipeline Health",
+  "description": "Modern Data Platform -- Sprint 13 close-out, part 2. Every panel's query built against real Prometheus metric/label names confirmed live via the Prometheus HTTP API before this file was written (see docs/architecture/roadmap-next-steps.md), not guessed from the instrumentation code alone. Covers the 3 real metric sources documented in README's Phase 6: the processing framework (extract_postgres, via Pushgateway), the Bronze Consumer (scraped directly), and Airflow (via statsd-exporter).",
+  "tags": ["modern-data-platform", "sprint-13"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Processing Framework (extract_postgres)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Pipeline duration (mean)",
+      "description": "mdp_pipeline_duration_seconds_sum / _count, by job and status. Pushed once per real extract_postgres run (PrometheusHook.push()), not scraped continuously -- see logging_config.py's sibling, prometheus_metrics_hook.py.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "mdp_pipeline_duration_seconds_sum / mdp_pipeline_duration_seconds_count",
+          "legendFormat": "{{job}} ({{status}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Time since last pipeline run",
+      "description": "time() - mdp_pipeline_last_run_timestamp_seconds, per job. A staleness indicator: this should stay under the DAG's own schedule interval (30 min for marketplace_batch_pipeline's extract_postgres task) -- a value climbing well past that means the pipeline stopped running, not just slowed down.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2400 },
+              { "color": "red", "value": 5400 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "time() - mdp_pipeline_last_run_timestamp_seconds",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Stage executions by status",
+      "description": "sum by (stage_name, status) (mdp_stage_executions_total) -- one series per Postgres entity Stage (Extract Customers, Extract Orders, ...).",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum by (stage_name, status) (mdp_stage_executions_total)",
+          "legendFormat": "{{stage_name}} ({{status}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Bronze Consumer (streaming)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Consumer lag by entity",
+      "description": "mdp_bronze_consumer_lag, per topic/entity -- see roadmap-next-steps.md for a known limitation: this can read far higher than reality for a few minutes right after a bronze-consumer restart (OFFSET_INVALID before the Consumer's local position syncs). Cross-check against `kafka-consumer-groups --describe` before reacting to a spike right after a restart.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "mdp_bronze_consumer_lag",
+          "legendFormat": "{{entity}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Messages consumed (rate, 5m)",
+      "description": "rate(mdp_bronze_messages_consumed_total[5m]), per entity -- real throughput, not the round-duration proxy the roadmap's own throughput investigation had to reason about before this metric existed.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "cps" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "rate(mdp_bronze_messages_consumed_total[5m])",
+          "legendFormat": "{{entity}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Write duration p95",
+      "description": "histogram_quantile(0.95, ...) over mdp_bronze_write_duration_seconds_bucket, per entity -- each write_deltalake() call to bronze/{entity}/.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "histogram_quantile(0.95, sum by (le, entity) (rate(mdp_bronze_write_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{entity}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Write failures (1h)",
+      "description": "sum(increase(mdp_bronze_write_failures_total[1h])) -- should be 0. Non-zero doesn't necessarily mean data loss (the round-robin loop retries a failed flush next cycle, see roadmap-next-steps.md's livelock-fix entry), but is always worth looking at.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "sum(increase(mdp_bronze_write_failures_total[1h]))",
+          "legendFormat": "failures",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Airflow",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Task finishes by task and state",
+      "description": "airflow_task_finish_total{dag_id, task_id, state} -- statsd-exporter's mapping.yml converts Airflow's dotted airflow.ti.finish.<dag>.<task>.<state> StatsD metric into these labels, one series per (task_id, state) pair.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "airflow_task_finish_total",
+          "legendFormat": "{{task_id}} ({{state}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "DAG run duration (p50/p90/p99)",
+      "description": "airflow_dagrun_duration_success_seconds{dag_id, quantile} -- StatsD timer, pre-aggregated into quantiles by statsd-exporter itself (not a Prometheus histogram_quantile() over raw buckets).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "airflow_dagrun_duration_success_seconds",
+          "legendFormat": "{{dag_id}} (p{{quantile}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Pool slots (running / queued / open)",
+      "description": "airflow_pool_running_slots / airflow_pool_queued_slots / airflow_pool_open_slots, per pool (catalog, ingestion, quality, transformation, default_pool).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "airflow_pool_running_slots",
+          "legendFormat": "{{pool}} running",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "airflow_pool_queued_slots",
+          "legendFormat": "{{pool}} queued",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "airflow_pool_open_slots",
+          "legendFormat": "{{pool}} open",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Scheduler heartbeat rate",
+      "description": "rate(airflow_scheduler_heartbeat_total[5m]) -- a liveness signal: this dropping to (near) zero for an extended window means the scheduler stopped, not just that nothing is scheduled right now.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "fieldConfig": { "defaults": { "unit": "hz" }, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "expr": "rate(airflow_scheduler_heartbeat_total[5m])",
+          "legendFormat": "heartbeat/s",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}
