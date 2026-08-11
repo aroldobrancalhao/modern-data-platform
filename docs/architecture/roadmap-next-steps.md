@@ -2137,3 +2137,23 @@ more" discipline as everywhere else today.
 
 `mypy src/` now reports **0 errors across all 289 source files** --
 this was the last one. Full suite: 512 passed, `ruff` clean.
+
+## Email as a second Grafana notification channel -- deferred, not forgotten
+
+Telegram (`@AlertasMDP_bot`, see the entry above) was chosen first
+deliberately, not because it's the better long-term channel: it needed
+no infrastructure of its own (no SMTP server, no app password, no mail
+relay) to stand up and validate end to end in one session. Email is
+the more realistic channel for a real company environment --
+searchable history, threading, integrates with ticketing tools the way
+a Telegram DM doesn't.
+
+**Not done in this session, explicitly deferred**: no SMTP config
+exists anywhere in this stack yet (`docker-compose.yml`/`.env` have
+none). When picked up: same discipline as Telegram above --
+- Real contact point via provisioning (`type: email`), not the UI.
+- Real SMTP credentials sourced from container env vars, never
+  hardcoded in a tracked file (same pattern as
+  `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`).
+- A forced real alert, confirmed delivered by checking the actual
+  inbox -- not "the Test button said OK" and not "should work".
