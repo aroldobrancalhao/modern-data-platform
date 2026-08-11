@@ -1232,6 +1232,13 @@ services:
     init: true
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Real Telegram contact point (provisioning/alerting/contactpoints.yml)
+      # -- these two are plain container env vars, not GF_*-prefixed,
+      # read via Grafana provisioning's own ${TELEGRAM_BOT_TOKEN} /
+      # ${TELEGRAM_CHAT_ID} expansion so the real token/chat id never
+      # sits in a tracked YAML file. Bot: @AlertasMDP_bot.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana

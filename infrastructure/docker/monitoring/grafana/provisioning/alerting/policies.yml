@@ -1,13 +1,15 @@
 # Modern Data Platform
 #
-# Sprint 13 close-out, part 4. Routes every alert rule's default
-# policy to mdp-webhook-placeholder (see contactpoints.yml in this
-# same directory for why that contact point doesn't actually deliver
-# anywhere yet).
+# Update, 2026-08-11: routes every alert rule's default policy to
+# mdp-telegram (contactpoints.yml, same directory) -- a real Telegram
+# bot (@AlertasMDP_bot), not the mdp-webhook-placeholder this used to
+# point at. All 4 rules (rules.yml) share this one flat default
+# policy (no nested routes/matchers), so this single change is what
+# moves all 4 onto the real channel -- no per-rule change needed.
 
 apiVersion: 1
 
 policies:
   - orgId: 1
-    receiver: mdp-webhook-placeholder
+    receiver: mdp-telegram
     group_by: ["grafana_folder", "alertname"]

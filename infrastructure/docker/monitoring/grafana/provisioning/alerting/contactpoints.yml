@@ -1,31 +1,65 @@
 # Modern Data Platform
 #
-# Sprint 13 close-out, part 4. This dev environment has no real
-# notification channel configured (no SMTP, no Slack webhook, no
-# PagerDuty) -- confirmed by checking, not assumed: `docker-compose.yml`
-# never sets any SMTP_*/Slack env var, and there's no equivalent to
-# AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN for a notification target anywhere
-# in this repo.
+# Update, 2026-08-11: real notification channel wired -- Telegram
+# (bot @AlertasMDP_bot). Closes the gap the comment below originally
+# described (no SMTP/Slack/PagerDuty configured anywhere in this
+# stack). mdp-webhook-placeholder is gone -- policies.yml now routes
+# the default policy at mdp-telegram instead.
 #
-# mdp-webhook-placeholder deliberately points at a URL nothing is
-# listening on (localhost:1 -- a port real services never bind, so the
-# failure is immediate and unambiguous rather than a slow timeout).
-# This makes alert *rule evaluation* (does the condition correctly
-# detect a real problem against real Prometheus data) fully real and
-# validated live -- see roadmap-next-steps.md -- while being explicit
-# that notification *delivery* is NOT validated and will NOT actually
-# reach anyone until a real channel is configured here. Structural
-# completeness (every rule needs a route to a contact point) without
-# faking a working delivery channel that doesn't exist in this
-# environment.
+# Field names (bottoken, chatid) confirmed against the real upstream
+# source, not guessed from docs: github.com/grafana/alerting
+# receivers/telegram/v1/config.go -- bottoken is the only field marked
+# Secure: true there, chatid is not (Telegram's own API treats it as
+# a plain identifier, not a credential).
+#
+# bottoken/chatid are never hardcoded here -- Grafana's file
+# provisioning expands $VARNAME directly from the container's own
+# environment (docker-compose.yml's grafana service:
+# TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID, sourced from
+# infrastructure/docker/.env, itself gitignored).
+#
+# bottoken lives under `settings`, not `secureSettings` -- a real,
+# confirmed limitation of this Grafana version (13.1.2), not a syntax
+# mistake: tried both `$TELEGRAM_BOT_TOKEN` and `${TELEGRAM_BOT_TOKEN}`
+# under `secureSettings` first, both failed provisioning identically
+# ("could not find Bot Token in settings" -- decryptFn.Get() returns
+# empty for a secureSettings key during initial file-provisioned
+# creation, confirmed by reading github.com/grafana/alerting's own
+# receivers/telegram/v1/config.go). Moving the same `$TELEGRAM_BOT_TOKEN`
+# reference to `settings` provisions and validates cleanly -- env-var
+# expansion works there, just not in secureSettings for this
+# provisioner/version combination.
+#
+# Trade-off, accepted deliberately, not silently: `settings` values
+# are stored in Grafana's own database in plaintext (secureSettings
+# would be encrypted at rest via Grafana's secret store). The token
+# itself is still never committed to git -- it only ever exists as a
+# real value inside this container's environment and Grafana's own
+# local sqlite DB (grafana_data volume), same trust boundary as every
+# other credential this project already keeps in
+# infrastructure/docker/.env. Revisit if Grafana fixes secureSettings
+# env expansion in a future version, or if this contact point ever
+# needs to live somewhere with a stricter at-rest-encryption
+# requirement than this local dev stack has today.
+#
+# Original placeholder comment, kept for context (why a contact point
+# existed at all before a real channel did): this dev environment had
+# no real notification channel configured (no SMTP, no Slack webhook,
+# no PagerDuty) -- confirmed by checking, not assumed. The
+# then-placeholder (mdp-webhook-placeholder, pointed at localhost:1,
+# a port nothing ever binds) made alert *rule evaluation* fully real
+# and validated live while being explicit that notification *delivery*
+# wasn't -- see roadmap-next-steps.md for that entry and this one.
 
 apiVersion: 1
 
 contactPoints:
   - orgId: 1
-    name: mdp-webhook-placeholder
+    name: mdp-telegram
     receivers:
-      - uid: mdp-webhook-placeholder-uid
-        type: webhook
+      - uid: mdp-telegram-uid
+        type: telegram
         settings:
-          url: http://localhost:1/no-real-channel-configured-yet
+          chatid: $TELEGRAM_CHAT_ID
+          parse_mode: HTML
+          bottoken: $TELEGRAM_BOT_TOKEN
