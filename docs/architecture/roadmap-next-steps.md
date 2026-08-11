@@ -1564,3 +1564,163 @@ an explicit `AssertionError` instead of a silent type lie), or (c)
 give `_flatten()` two callers with different signatures instead of
 sharing one. No real behavior is wrong today -- this is a type-safety
 gap, not a runtime bug.
+
+## Sprint 13 (Observability) close-out, part 1: the 5 unwired CloudWatch log groups -- resolved per log group, not uniformly
+
+Picked up from "Airflow remote logging is AWS-coupled by construction"
+and the README's own "The other 5 log groups (Athena, Databricks,
+Glue, platform, Terraform) not wired" line. Investigated each of the 5
+individually rather than treating them as one uniform task -- they
+turned out to need 3 different answers, not one:
+
+**`glue` and `athena` -- removed from Terraform, not wired.** Confirmed
+against AWS's own docs before deciding, not assumed:
+- Glue's CloudWatch logging is opt-in per job
+  (`--enable-continuous-cloudwatch-log`, docs.aws.amazon.com/glue/
+  latest/dg/monitor-continuous-logging-enable.html) -- and this
+  project has zero Glue Jobs/Crawlers to attach it to (only Glue Data
+  Catalog databases via `module.catalog`, confirmed via
+  `grep -rln aws_glue_crawler infrastructure/terraform/`).
+- Athena has no CloudWatch *Logs* mechanism at all for query
+  execution -- only CloudWatch *metrics* and CloudTrail API audit
+  (docs.aws.amazon.com/athena/latest/ug/
+  security-logging-monitoring.html lists exactly those two, nothing
+  else).
+
+Both log groups had zero possible producer, ever -- dead
+infrastructure by design, same disposal criteria ADR-013 already used
+for the `ingestion/` package. `terraform plan` confirmed exactly `2 to
+destroy, 0 to add/change` before applying; `aws logs
+describe-log-groups` confirmed only `airflow`/`databricks`/
+`platform`/`terraform` remain.
+
+**`platform` -- wired for real, validated live.** `configure_logging()`
+(`data_platform/observability/logging_config.py`) gained an additive
+structlog processor (`_ship_to_cloudwatch`, runs after `JSONRenderer`)
+that ships the exact same JSON lines the console already prints to a
+`watchtower.CloudWatchLogHandler`, gated by
+`LOG_CLOUDWATCH_ENABLED`/`LOG_CLOUDWATCH_LOG_GROUP` -- console output
+via `PrintLoggerFactory` is untouched either way. A CloudWatch failure
+disables shipping for the rest of the process (warns once on stderr,
+never crashes the caller) -- this protects a long-running process
+(bronze-consumer), a different trade-off than the two shippers below.
+IAM: `mdp-airflow-ingest-dev` and `mdp-bronze-consumer-dev` both
+gained a `CloudWatchPlatformLogs` statement (`CreateLogGroup`/
+`CreateLogStream`/`DescribeLogStreams`/`PutLogEvents`/`GetLogEvents`,
+mirroring the existing `CloudWatchAirflowLogs` statement's own
+reasoning for why `CreateLogGroup` is needed even though the group
+pre-exists). `watchtower` added as a core dependency
+(`pyproject.toml`), plus into `infrastructure/docker/airflow/
+Dockerfile`'s manually-mirrored dependency list (see the gap this
+missed, below). Validated live: real bronze-consumer startup log
+lines (`Metrics server started.`, `Bronze Consumer starting.`)
+confirmed via `aws logs get-log-events` against `/mdp/dev/platform`.
+
+**`terraform` -- wired via an optional wrapper, validated live.**
+`scripts/terraform_with_cloudwatch_logging.py` -- runs
+`terraform -chdir=.../environments/dev <args>` as a subprocess,
+mirrors its combined stdout/stderr to the console unchanged, and ships
+each line to `/mdp/dev/terraform` via the same watchtower pattern.
+Deliberately optional, not a replacement for running `terraform`
+directly (this project's own day-to-day workflow, this session
+included, still does that) -- an opt-in second way to get a durable,
+queryable record of a real plan/apply's terminal output. Runs under
+whatever credential the caller's shell already has for Terraform
+itself (the personal `terraform-admin` key) -- already broad enough
+(`logs:*`), no new IAM needed. Unlike the `platform` handler, a
+CloudWatch failure here is surfaced on stderr, not silently swallowed
+-- a short-lived, interactively-run wrapper around a real
+infrastructure mutation should make a broken audit trail visible, not
+hide it (it still never fails the terraform run itself over a logging
+concern). Validated live: a real `terraform plan` (`No changes`, exit
+0) shipped 76 real events to `/mdp/dev/terraform`, confirmed via `aws
+logs get-log-events`.
+
+**`databricks` -- wired via a new Airflow task, event-driven, validated
+against a real "Full Pipeline" run.** New module,
+`integrations/databricks/observability/run_output_shipper.py`
+(same domain-module pattern as `integrations/kafka/messaging/`),
+deliberately Airflow-agnostic -- takes an already-authenticated
+`WorkspaceClient`, doesn't import Airflow. `marketplace_batch_pipeline.py`
+gained `ship_databricks_run_logs`, a `@task` running in **parallel** to
+`dbt_run_gold` (`run_full_pipeline >> [dbt_run_gold,
+ship_databricks_run_logs()]`), not upstream of it -- a shipping
+failure must never block the real Gold build. Confirmed before
+building: the 3 real Jobs (`bronze`/`silver`/`full_pipeline`) all run
+on **serverless** compute (`environment_key`, no `new_cluster`/
+`existing_cluster` in any `*_job.yml`) -- no `cluster_log_conf`
+possible, so the Jobs API's `get-run-output` (capped at 5MB by the API
+itself, docs.databricks.com/api/workspace/jobs/getrunoutput) is the
+only reachable log-shaped signal, not full driver/executor logs.
+Builds its own `WorkspaceClient(host=, token=)` from the
+`databricks_default` Connection -- deliberately not
+`DatabricksContext.workspace`, which resolves `~/.databrickscfg`'s
+`modern-data-platform` profile (expired, see
+`docs/environment-inventory.md`, and the wrong auth mechanism for a
+process running inside the Airflow container regardless). IAM
+deliberately narrower than `platform`'s: only `CreateLogStream`/
+`PutLogEvents` on `mdp-airflow-ingest-dev` -- no `CreateLogGroup`
+(confirmed by reading watchtower's own source: it only calls
+`CreateLogGroup` when `create_log_group=True`, and this code passes
+`False`) and no `DescribeLogStreams`/`GetLogEvents` (watchtower's
+write path never calls either -- confirmed the same way). **This is
+more precise than `platform`'s own grant above, which included those
+3 unused actions for consistency with the pre-existing Airflow
+statement -- worth revisiting `platform`'s grant down to the same
+minimal set in a future pass, not done here** (both work today; this
+is a least-privilege tightening opportunity, not a bug).
+
+Validated live against a real scheduled run
+(`scheduled__2026-08-11T12:55:24...`): `run_databricks_full_pipeline`
+succeeded (~10 min), `ship_databricks_run_logs` shipped 4 real events
+(one per sub-task -- `bronze`/`bronze_validate`/`bronze_optimize`/
+`silver`, all `TERMINATED`/`SUCCESS`) to `/mdp/dev/databricks`,
+confirmed via `aws logs get-log-events`. A genuine, harmless API quirk
+found along the way: `RunOutput.error` is populated with a generic
+placeholder string ("Please refer to the logs for this run on the
+triggered run details page.") even on success, not only on failure --
+`_format_task_output()` includes it whenever present, which reads as
+if every task had an error; cosmetic, not fixed here, easy to filter
+on `result_state` if it becomes confusing in practice.
+
+**Two real, live-caught bugs found validating the above, both fixed
+before the final passing run:**
+
+1. **`infrastructure/docker/airflow/Dockerfile`'s manually-mirrored
+   dependency list was stale the moment `watchtower` was added to
+   `pyproject.toml`.** That Dockerfile's own comment already says
+   it's "the full `[project.dependencies]` set ... same version
+   floors" -- a second, hand-maintained copy that doesn't update
+   itself. Caught live: the very first `ship_databricks_run_logs` run
+   (against the *old* image, before the rebuild below) failed with
+   `ModuleNotFoundError` for `watchtower` inside the Airflow
+   container, even though `bronze-consumer` (built via `uv sync
+   --frozen`, no manual mirror) already had it. Fixed by adding
+   `watchtower` to the Dockerfile's list and rebuilding.
+2. **No `AWS_REGION`/`AWS_DEFAULT_REGION` was ever set for the Airflow
+   containers.** `extract_postgres` never needed it by accident --
+   `AwsContext`/`AwsSettings` always pass an explicit `region_name` to
+   `boto3.Session()` (default `"us-east-1"`, itself the separate,
+   already-documented gap in `docs/environment-inventory.md`) -- so
+   boto3 never had to resolve a region from the environment.
+   `watchtower`'s own internal `boto3.client("logs")` construction has
+   no such override and failed with a real
+   `botocore.exceptions.NoRegionError` the first time it was actually
+   exercised inside an Airflow container (a real
+   `ship_databricks_run_logs` failure, not a hypothetical). Fixed by
+   adding `AWS_REGION`/`AWS_DEFAULT_REGION: sa-east-1` to
+   `x-airflow-common-env` -- same value/reasoning bronze-consumer's
+   compose block already carried for the same underlying reason (see
+   "`write_deltalake()` ... doesn't follow a cross-region redirect"
+   earlier in this file). This also retroactively fixes `platform`'s
+   own shipping path for the 3 non-DAG-task `configure_logging()`
+   callers that run inside Airflow containers (the 2 one-off scripts,
+   the bootstrap script) -- their first real attempt would have hit
+   the exact same `NoRegionError`, just not yet observed live before
+   this fix landed.
+
+**Remaining Sprint 13 work, not started in this pass**: Grafana
+dashboards (only the Prometheus datasource is provisioned today, no
+dashboard JSON) and alerting (no `rule_files`/Alertmanager, no Grafana
+unified-alerting rules). This entry closes out the "5 unwired log
+groups" sub-item only.
