@@ -2292,3 +2292,39 @@ holder, timestamp) -- direct proof `use_lockfile` is enforcing mutual
 exclusion, not a hypothetical. A follow-up clean `terraform plan`
 confirmed no lock was left orphaned after the failed `apply` --
 state remained fully accessible.
+
+## Sprint 14, item 2: committed `terraform.tfvars` for both roots -- the 6 hand-typed `-var` flags are gone
+
+Every real `terraform plan`/`apply` this entire session needed 6
+`-var` flags typed by hand (no committed tfvars ever existed). Fixed:
+`terraform.tfvars` in both `bootstrap/` and `environments/dev/` --
+one of the filenames Terraform auto-loads with zero flags needed.
+
+**Evaluated deliberately whether anything here shouldn't be
+committed, not assumed safe**: none of the 6 values (`aws_region`,
+`project_name`, `environment`, `account_id`, `owner`, `repository`,
+plus `bootstrap`'s own `terraform_state_bucket`) are credentials.
+`account_id` (857854758128) looks like the one that might warrant
+caution, but isn't a *new* exposure -- it's already public in this
+repo's own tracked git history, baked into every real resource name
+this project has ever created (`mdp-tfstate-857854758128`,
+`mdp-datalake-dev-857854758128`, and so on, since before this session).
+A real secret would use a different mechanism entirely, already
+established elsewhere in this project: a gitignored file or an
+environment variable (see `infrastructure/docker/.env`'s
+`TELEGRAM_BOT_TOKEN`, every `*_SECRET_ACCESS_KEY`) -- never a `.tfvars`
+value. `databricks_uc_external_id` deliberately left out of the new
+file -- it already has a real, safe default in `variables.tf`, and
+duplicating it would just be a second copy that could drift.
+
+`.gitignore`'s existing blanket `*.tfvars` rule (a sensible default --
+a future environment's tfvars could easily carry real values) is kept
+as-is; these 2 specific files are named exceptions
+(`!infrastructure/terraform/{bootstrap,environments/dev}/terraform.tfvars`),
+not a blanket policy change.
+
+**Validated live with zero flags, not assumed to auto-load correctly**:
+`terraform plan` (no `-var` anything) in `environments/dev/` --
+`"No changes"` against the real 62-resource state. Same in `bootstrap/`
+-- only the same pre-existing, unrelated tag drift already documented
+elsewhere in this file, nothing new.

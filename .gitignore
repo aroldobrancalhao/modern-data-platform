@@ -100,6 +100,15 @@ logs/
 *.tfvars.json
 *.tfplan
 
+# Sprint 14: the 2 real roots' own terraform.tfvars are tracked
+# deliberately -- no credentials in either, see each file's own
+# comment. The blanket *.tfvars rule above stays as the default for
+# anything else (a future environment's tfvars could easily carry
+# real values that shouldn't be committed) -- these 2 are named
+# exceptions, not a blanket policy change.
+!infrastructure/terraform/bootstrap/terraform.tfvars
+!infrastructure/terraform/environments/dev/terraform.tfvars
+
 crash.log
 
 override.tf
