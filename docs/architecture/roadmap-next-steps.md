@@ -1180,7 +1180,7 @@ before this fix, the test failed 100% of the time (0/8+ live runs),
 every time stalling after exactly one message. See the next entry for
 what's still open.
 
-## `run_bronze_consumer` sometimes doesn't find messages that are genuinely sitting in the topic -- symptom documented, root cause NOT found, own-noise hypothesis tested and weakened
+## `run_bronze_consumer` sometimes doesn't find messages that are genuinely sitting in the topic -- root cause found, 2026-08-11 (see update at the end of this entry)
 
 Found live while validating the fix above, in the same session -- kept
 as its own entry (not just a footnote on that fix) because it's a
@@ -1272,6 +1272,77 @@ real `run_bronze_consumer` bug, not done yet**:
 has no real downstream consumer yet, and this is one `real_kafka`-
 marked integration test, excluded from the default suite. Revisit when
 there's time for #1-3 above, not urgently.
+
+**Update, 2026-08-11 -- all 3 steps above executed, root cause found
+and confirmed with direct evidence, not inferred:**
+
+1. **Isolated run**: failed on the very first attempt, alone, with
+   real idle time before and after (nothing else touching Kafka this
+   session up to that point) -- immediately stronger evidence of a
+   real bug than the "own noise" hypothesis this entry had already
+   started to doubt.
+2. **Instrumented the real `run_bronze_consumer` loop directly**
+   (temporary `print(..., file=sys.stderr)` around the real
+   `consume_batch()` call and the `future.done()` skip branch --
+   removed after, `git diff` confirms a byte-identical revert), then
+   ran the test 5 times back to back: **5/5 failed** (higher than the
+   previously-documented 60-70%, itself a clue -- see point 4).
+3. **The captured trace directly answers the "flush in-flight"
+   question**: iteration 0's `consume_batch()` immediately returned 25
+   messages (filling the buffer to `_MAX_BATCH_SIZE=25`, the patched
+   test value, triggering a flush). Every one of the next **497
+   iterations** logged `SKIP_POLL_FLUSH_IN_FLIGHT` -- that single
+   flush never completed, blocking all further polling for the only
+   entity under test the entire time. Those 497 iterations spanned
+   only ~86ms of wall-clock time (`time.sleep(0)` barely yields any
+   real time), confirming the loop wasn't the bottleneck -- the flush
+   itself (`write_deltalake()` + `commit()`) was. It finally resolved
+   between iterations 498 and 499 (~270ms after submission), at which
+   point a *second* `consume_batch()` immediately returned another 25
+   messages -- confirming a real, sizeable backlog still remained.
+4. **Real topic size measured** (`kafka-get-offsets`, not assumed):
+   **123 messages** across 3 partitions today (46+39+38), consistent
+   with this test's own docstring already warning "every run leaves 2
+   permanent Kafka messages behind... the topic only ever grows" --
+   it has been growing across every session that ever ran this test,
+   not just today's.
+
+**Conclusion, directly supported by 1-4 above, not a guess:** with
+only 1 entity under test (no benefit from `_FLUSH_POOL_SIZE`'s
+concurrency, which only helps *across* entities), each flush cycle
+serializes ~270ms of dead time where the round-robin loop can only
+busy-wait for *this specific entity*, retrieving at most 25 messages
+per cycle. The 500-iteration budget's real wall-clock ceiling only
+ever allows ~2 such cycles to actually complete (confirmed: exactly 2
+in the captured trace, 50 messages total) -- nowhere near enough to
+reach a newly-inserted row sitting behind a 123-message backlog. This
+is **not** a `run_bronze_consumer` bug -- it is a test-design
+assumption (a fixed iteration budget sized for a topic that was
+smaller when the number was last chosen) that the topic's own
+permanent, unbounded growth has now outgrown. This also fully explains
+why raw single-threaded reproductions never showed it (no in-flight
+blocking tax exists in a plain synchronous loop) and why the
+fresh-vs-reused-consumer-group experiment from earlier in this entry
+never found a signal either way -- group freshness was never the
+relevant variable.
+
+**Not fixed here -- this is a real design trade-off, not a bug patch,
+and wasn't unilaterally decided mid-investigation:** candidate fixes,
+not applied:
+- Raise `_MAX_POLL_ITERATIONS` again -- treats the symptom, not the
+  cause; the topic keeps growing by 2 messages every single run
+  (including every future run of this very test), so any fixed number
+  chosen today eventually fails again the same way.
+- Consume from `latest` instead of `earliest` for this specific test's
+  fresh consumer group -- matches what the test actually needs to
+  prove (a new row flows through), not "replay full history every
+  time." Real trade-off of its own: needs the consumer subscribed
+  *before* the Postgres insert happens (a race today's insert-then-
+  start-consumer ordering doesn't have to worry about), a structural
+  change to the test, not a one-line fix.
+- Give the topic an actual retention/cleanup policy, or reset
+  (delete+recreate) it periodically -- stops the unbounded growth at
+  the source rather than working around it in the test.
 
 ## `airflow/config/terraform_outputs.json` was one `export-terraform-outputs.sh` run away from leaking real AWS secret keys into git history -- fixed
 
