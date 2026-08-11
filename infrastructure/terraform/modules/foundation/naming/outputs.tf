@@ -6,6 +6,10 @@ output "resource_prefix" {
   value = local.resource_prefix
 }
 
+output "resource_prefix_underscore" {
+  value = local.resource_prefix_underscore
+}
+
 output "glue_database" {
   value = local.glue_database
 }

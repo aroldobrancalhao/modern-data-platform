@@ -17,6 +17,12 @@ locals {
     )
   )
 
+  # Glue database names can't use hyphens (Athena/Glue naming rules) --
+  # same resource_prefix, underscore-joined instead. Added for the
+  # "mdp-" hardcoded-name portability pass (bronze/silver/gold Glue
+  # catalog databases), see docs/architecture/roadmap-next-steps.md.
+  resource_prefix_underscore = replace(local.resource_prefix, "-", "_")
+
   glue_database = lower(
     format(
       "%s_glue_%s",

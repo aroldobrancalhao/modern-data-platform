@@ -6,9 +6,9 @@ module "glue_bronze" {
 
   source = "../../modules/catalog/glue"
 
-  database_name = "mdp_bronze_dev"
+  database_name = module.naming_glue_bronze.resource_prefix_underscore
 
-  crawler_name = "mdp-bronze-crawler-dev"
+  crawler_name = module.naming_glue_bronze_crawler.resource_prefix
 
   crawler_role_arn = module.glue_iam.role_arn
 
@@ -23,9 +23,9 @@ module "glue_silver" {
 
   source = "../../modules/catalog/glue"
 
-  database_name = "mdp_silver_dev"
+  database_name = module.naming_glue_silver.resource_prefix_underscore
 
-  crawler_name = "mdp-silver-crawler-dev"
+  crawler_name = module.naming_glue_silver_crawler.resource_prefix
 
   crawler_role_arn = module.glue_iam.role_arn
 
@@ -40,9 +40,9 @@ module "glue_gold" {
 
   source = "../../modules/catalog/glue"
 
-  database_name = "mdp_gold_dev"
+  database_name = module.naming_glue_gold.resource_prefix_underscore
 
-  crawler_name = "mdp-gold-crawler-dev"
+  crawler_name = module.naming_glue_gold_crawler.resource_prefix
 
   crawler_role_arn = module.glue_iam.role_arn
 

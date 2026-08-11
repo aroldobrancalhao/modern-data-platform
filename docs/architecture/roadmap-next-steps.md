@@ -1827,3 +1827,83 @@ dashboards and alerting (rule evaluation) are all real, validated
 end-to-end against live data -- the one explicitly deferred piece is
 alert notification *delivery*, tracked above as its own follow-up, not
 silently folded into "done".
+
+## `"mdp-"` hardcoded resource names -- 20 of 21 interpolated via `module.naming`, zero-impact refactor confirmed live
+
+Investigated before touching anything: grepped the whole
+`infrastructure/terraform/` tree for `"mdp-`/`"mdp_` literals, found
+**23 lines across 5 files** (not the 22 originally estimated) --
+21 real resource-name assignments (Athena workgroups, Glue databases/
+crawlers, IAM roles/policies/users) plus 2 backend-config `bucket =
+"mdp-tfstate-..."` lines (`bootstrap/backend.tf`,
+`environments/dev/backend.tf`), which are a separate, structurally
+different problem -- see the next entry.
+
+**Key finding, confirmed before writing any code**: `var.project_name`
+("mdp") and `var.environment` ("dev") are the only values ever passed
+in every real `apply` this project has done -- so replacing
+`"mdp-airflow-ingest-dev"` with
+`"${var.project_name}-airflow-ingest-${var.environment}"` produces the
+**identical string**. This is deterministic string interpolation, not
+something that needed empirical proof -- but the resulting
+`terraform plan` was still required to show it for real before
+applying, not trusted on reasoning alone (see below). This also meant
+`terraform state mv` was never actually needed anywhere in this
+refactor (it solves *address* renames; nothing here changes an
+address or, in 20/21 cases, even a value).
+
+**Implementation**: reused `modules/foundation/naming` (already
+existed, already used for the 2 datalake/athena-staging bucket names
+in `storage.tf`, but never adopted for anything else) -- 21 new
+`module "naming_x"` instances in `foundation.tf`, one per hardcoded
+name, each just supplying `resource_name`. The module gained one new
+output, `resource_prefix_underscore` (`replace(resource_prefix, "-",
+"_")`), needed for the 3 Glue database names (Glue/Athena database
+names can't contain hyphens). A 22nd occurrence found along the way,
+not in the original inventory: `databricks_uc_assume_role`'s
+self-trust policy had a *second*, independent hardcoded copy of the
+same role name (`security.tf`'s own comment already explained why it
+couldn't reference `aws_iam_role.databricks_uc.arn` directly --
+circular dependency, since that data source is the role's own
+`assume_role_policy`) -- fixed the same way, referencing
+`module.naming_databricks_uc_role.resource_prefix` instead (a plain
+string-formatting module, not the role resource, so no circular
+dependency).
+
+**A real, unrelated destroy surfaced in the first full plan, isolated
+before applying anything**: `terraform plan` (no `-target`) showed
+`2 to add, 0 to change, 2 to destroy` -- not from the naming work
+(every renamed resource's `name`/`*_name` field showed **zero diff**,
+confirming the "identical string" prediction exactly). The actual
+cause: `module.dbt_gold`'s `description` argument, edited earlier the
+same session (wiring dbt_gold's IAM, "Not yet wired..." ->
+"Wired...") but never applied -- `aws_iam_policy.description` is
+immutable via the AWS API, so any change to it forces
+destroy-and-recreate of the policy object (confirmed by reading the
+plan's own `# forces replacement` annotation, and separately by
+reading `modules/security/iam_user/main.tf`: `description` is used
+*only* on `aws_iam_policy.this`, never on `aws_iam_user.this` or
+`aws_iam_access_key.this` -- so this replace could never have touched
+the actual credential).
+
+**Applied in two isolated `-target` passes, each with its own full,
+unabridged `plan` shown before `apply`, per this session's explicit
+"0 destroy is non-negotiable for this one" instruction:**
+1. 20 of the 21 naming resources (excluding `module.dbt_gold.
+   aws_iam_policy.this`/`aws_iam_user_policy_attachment.this`, the two
+   caught up in the description replace) -- `terraform plan` showed
+   **"No changes"**, confirmed for real, not assumed; `apply` was a
+   literal no-op (`Resources: 0 added, 0 changed, 0 destroyed`).
+2. The `dbt_gold` policy replace, isolated to just those 2 resources --
+   `2 to add, 0 to change, 2 to destroy`, applied
+   (`Resources: 2 added, 0 changed, 2 destroyed`). Validated live
+   afterward, not assumed safe: `aws sts get-caller-identity` and a
+   real `SELECT 1` Athena query (workgroup `mdp-athena-dbt-dev`) both
+   succeeded using `MDP_DBT_GOLD_ACCESS_KEY_ID`/`SECRET` straight from
+   `infrastructure/docker/.env` -- confirming the access key survived
+   the policy's destroy/recreate exactly as the module source predicted.
+
+**Remaining**: the 2 backend-config lines -- see the next entry, a
+structurally different fix (partial backend configuration), not more
+`module.naming` instances.
+

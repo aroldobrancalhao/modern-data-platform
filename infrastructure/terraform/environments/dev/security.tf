@@ -31,9 +31,9 @@ module "databricks_iam" {
 
   source = "../../modules/security/iam"
 
-  role_name = "mdp-databricks-role-dev"
+  role_name = module.naming_databricks_role.resource_prefix
 
-  policy_name = "mdp-datalake-policy-dev"
+  policy_name = module.naming_datalake_policy.resource_prefix
 
   description = "Access policy for the Data Lake."
 
@@ -71,10 +71,13 @@ module "databricks_iam" {
 # side of that (aws_iam_role_policy.databricks_uc_self_assume,
 # granting sts:AssumeRole on this same ARN) isn't enough on its own --
 # the trust policy also has to allow the role itself as a principal.
-# The ARN is built from var.account_id + the literal role name rather
-# than referencing aws_iam_role.databricks_uc.arn, since this document
-# is itself the role's assume_role_policy -- referencing the role's
-# own attribute here would be a circular dependency.
+# The ARN is built from var.account_id + the role name (via
+# module.naming_databricks_uc_role -- a plain string-formatting
+# module, not the role resource itself, so this carries no circular
+# dependency) rather than referencing aws_iam_role.databricks_uc.arn
+# directly, since this document is itself the role's
+# assume_role_policy -- referencing the role's own attribute here
+# would be circular.
 data "aws_iam_policy_document" "databricks_uc_assume_role" {
 
   statement {
@@ -87,7 +90,7 @@ data "aws_iam_policy_document" "databricks_uc_assume_role" {
 
       identifiers = [
         "arn:aws:iam::414351767826:role/unity-catalog-prod-UCMasterRole-14S5ZJVKOTYTL",
-        "arn:aws:iam::${var.account_id}:role/mdp-databricks-uc-role-dev"
+        "arn:aws:iam::${var.account_id}:role/${module.naming_databricks_uc_role.resource_prefix}"
       ]
     }
 
@@ -115,7 +118,7 @@ data "aws_iam_policy_document" "databricks_uc_assume_role" {
 
 resource "aws_iam_role" "databricks_uc" {
 
-  name = "mdp-databricks-uc-role-dev"
+  name = module.naming_databricks_uc_role.resource_prefix
 
   description = "Assumed by Databricks Unity Catalog to access the Data Lake bucket via a Storage Credential / External Location."
 
@@ -257,9 +260,9 @@ module "glue_iam" {
 
   source = "../../modules/security/iam"
 
-  role_name = "mdp-glue-role-dev"
+  role_name = module.naming_glue_role.resource_prefix
 
-  policy_name = "mdp-glue-policy-dev"
+  policy_name = module.naming_glue_policy.resource_prefix
 
   description = "Glue permissions."
 
@@ -476,9 +479,9 @@ module "bi_reader" {
 
   source = "../../modules/security/iam_user"
 
-  user_name = "mdp-bi-reader-dev"
+  user_name = module.naming_bi_reader.resource_prefix
 
-  policy_name = "mdp-bi-reader-policy-dev"
+  policy_name = module.naming_bi_reader_policy.resource_prefix
 
   description = "Read-only access to the Gold layer (Athena/Glue/S3) for external BI tools (Metabase, Power BI)."
 
@@ -654,9 +657,9 @@ module "airflow_ingest" {
 
   source = "../../modules/security/iam_user"
 
-  user_name = "mdp-airflow-ingest-dev"
+  user_name = module.naming_airflow_ingest.resource_prefix
 
-  policy_name = "mdp-airflow-ingest-policy-dev"
+  policy_name = module.naming_airflow_ingest_policy.resource_prefix
 
   description = "Scoped access for Airflow's own AWS credential: raw/ S3 read-write (extract_postgres) and the Airflow CloudWatch log group (remote task logging). Does not cover dbt_run_gold/dbt_test_gold, which stay on the personal key -- see roadmap-next-steps.md."
 
@@ -763,9 +766,9 @@ module "bronze_consumer" {
 
   source = "../../modules/security/iam_user"
 
-  user_name = "mdp-bronze-consumer-dev"
+  user_name = module.naming_bronze_consumer.resource_prefix
 
-  policy_name = "mdp-bronze-consumer-policy-dev"
+  policy_name = module.naming_bronze_consumer_policy.resource_prefix
 
   description = "Scoped access for the Bronze Consumer's own AWS credential: bronze/ S3 read-write only (append-only Delta writes). Currently shares Airflow's personal-key fallback (MDP_PERSONAL_ACCESS_KEY_ID/SECRET) in infrastructure/docker/docker-compose.yml -- see roadmap-next-steps.md."
 
@@ -1008,9 +1011,9 @@ module "dbt_gold" {
 
   source = "../../modules/security/iam_user"
 
-  user_name = "mdp-dbt-gold-dev"
+  user_name = module.naming_dbt_gold.resource_prefix
 
-  policy_name = "mdp-dbt-gold-policy-dev"
+  policy_name = module.naming_dbt_gold_policy.resource_prefix
 
   description = "Scoped access for dbt's own AWS credential (dbt_run_gold/dbt_test_gold): mdp-athena-dbt-dev workgroup, Glue read on mdp_silver_dev, Glue write on mdp_gold_dev, S3 read silver/ + read-write gold/. Wired into airflow/dags/marketplace_batch_pipeline.py's DBT_AWS_CREDENTIALS -- replaces MDP_PERSONAL_ACCESS_KEY_ID/SECRET for those two tasks, see roadmap-next-steps.md."
 

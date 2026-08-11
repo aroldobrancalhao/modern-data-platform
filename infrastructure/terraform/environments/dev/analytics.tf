@@ -6,7 +6,7 @@ module "athena" {
 
   source = "../../modules/analytics/athena"
 
-  workgroup_name = "mdp-athena-dev"
+  workgroup_name = module.naming_athena.resource_prefix
 
   # Moved to a dedicated staging bucket (module.athena_staging,
   # storage.tf) -- see that module's comment for why. Only the query
@@ -51,7 +51,7 @@ module "athena_dbt_build" {
 
   source = "../../modules/analytics/athena"
 
-  workgroup_name = "mdp-athena-dbt-dev"
+  workgroup_name = module.naming_athena_dbt_build.resource_prefix
 
   enforce_output_location = false
 
