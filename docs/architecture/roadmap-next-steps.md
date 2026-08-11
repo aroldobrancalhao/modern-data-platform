@@ -2473,3 +2473,102 @@ state, not just "should be configured now":**
   `>100%`), all confirmed via `describe-notifications-for-budget` and
   `describe-subscribers-for-notification` to have the same email
   attached.
+
+## `_MAX_BATCH_AGE_SECONDS` 30.0 -> 300.0, and 2 pre-existing flaky tests found (and mostly diagnosed) along the way
+
+**The change itself**: `src/streaming/consumers/bronze_consumer.py`'s
+`_MAX_BATCH_AGE_SECONDS` raised from 30.0 to 300.0. Motivated by the
+real object-count investigation above (`bronze/` streaming: 64,549
+objects for under 1 GB, average ~15KB/object) -- this pipeline has no
+real-time freshness requirement (portfolio/study project, traffic only
+from a manually-run simulator), so a low-volume entity flushing every
+30s regardless of how few records it held was pure commit-count waste.
+300s cuts that ~10x for age-triggered flushes, with zero memory-budget
+impact (`_MAX_BATCH_SIZE`/`_FLUSH_POOL_SIZE` both unchanged). Deliberately
+did *not* raise `_MAX_BATCH_SIZE` too -- the entities that actually
+saturate it (products/inventories) only did so during the one-time
+Frente 3 reprocess, not steady-state traffic, and touching it would
+have eaten back into the `_FLUSH_POOL_SIZE` memory margin tuned twice
+in the 2 days before this change.
+
+**Validated before committing, not assumed safe**: a controlled
+before/after comparison, 5 full-suite runs on each side (diff
+stashed vs applied), specifically to catch any interaction with this
+same morning's round-robin/idle-skip tuning. Before: 5/5 clean.
+After (raw diff, before the test fix below): 2/5 clean, 3/5 failed --
+all 3 the same test,
+`test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure`,
+never seen failing on the "before" side.
+
+**Root cause #1 (real, fixed)**: that test hardcoded a dependency on
+production's real `_MAX_BATCH_AGE_SECONDS` value via a `_FakeClock`
+(1 simulated second per `time.monotonic()` call) and sized its
+`max_iterations` budget (`batch_size + 500`) around the old 30s
+threshold needing "~30+ iterations". Raising the constant to 300
+meant the age-triggered second flush now needed ~300+ ticks instead,
+eating deep into that margin. Fixed by decoupling the test from
+production's value entirely -- `monkeypatch.setattr(bronze_consumer,
+"_MAX_BATCH_AGE_SECONDS", 5.0)`, matching the precedent already set by
+`test_bronze_consumer_real_kafka.py` for the same constant. This is
+the correct fix regardless of whatever `_MAX_BATCH_AGE_SECONDS` ends
+up being in production going forward.
+
+**Root cause #2 (real, pre-existing, NOT fixed -- separate scope)**:
+after the fix above, a confirmation batch (5 full-suite runs) still
+showed 1/5 failing the same test. Investigated further rather than
+accepting "close enough": reproduced the exact same failure
+(`table.num_rows == 100` instead of `150`) on the **fully original,
+untouched code** (`git stash` back to before any of today's changes to
+this file) -- 1 failure in 6 full-suite runs. This proves the residual
+flakiness has nothing to do with `_MAX_BATCH_AGE_SECONDS` at all (its
+real value or the mock) -- it's a pre-existing issue, already
+half-acknowledged in the test's own comment (*"Confirmed flaky at
+'+200' when run as part of the full suite... even though it passed
+reliably in isolation"* -- the margin was already bumped from +200 to
++500 once before, for exactly this reason, without eliminating it).
+
+The actual mechanism: `run_bronze_consumer`'s round-robin loop, when an
+entity's flush `Future` is still running, spins on `continue` +
+`time.sleep(0)` waiting for `future.done()` -- and **every spin
+iteration consumes one unit of the test's `max_iterations` budget**,
+independent of `_MAX_BATCH_AGE_SECONDS` or the fake clock entirely.
+Under real CPU contention (running alongside ~450 other tests in the
+same full-suite process), the background `ThreadPoolExecutor` thread
+actually completing `_flush()` can take longer in real wall-clock
+time, and since there's only one entity (`"orders"`) in this test, the
+outer loop's `iterations` counter advances once per spin too -- so a
+slow-scheduled first flush alone can burn a large, unpredictable chunk
+of the 600-iteration budget before the second (50-record) batch even
+starts being consumed, let alone reaches its own age/size flush
+trigger. This is a generic hazard in any test here that uses
+`max_iterations` as a proxy for "enough real time has passed," not
+specific to this one test -- `test_batch_commit_failure_does_not_crash_and_retries_next_cycle`
+(margin `_MAX_BATCH_SIZE + 200 = 300`, its own comment already names
+the identical mechanism: *"the retry is only submitted once the main
+loop observes the first attempt's Future as done(), which needs real
+iterations inside the budget, not just '+1'"*) is very likely the same
+class of issue, not a coincidence that both live in this file.
+
+**Baseline flake rates measured today** (full-suite runs, i.e. real
+contention -- both pass reliably in isolation, 100% in >10 combined
+isolated attempts across both tests):
+- `test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure`:
+  ~1 in 6-7 full-suite runs (1/6 on original untouched code, 1/5 after
+  the `_MAX_BATCH_AGE_SECONDS` mock fix -- statistically consistent
+  with each other, i.e. the mock fix did eliminate the *regression*,
+  not this pre-existing baseline).
+- `test_batch_commit_failure_does_not_crash_and_retries_next_cycle`:
+  ~2 in 5 isolated repeated runs (40%), confirmed identical with or
+  without today's `bronze_consumer.py` diff.
+
+**Candidate fix, mapped but deliberately not applied today**: raise
+each affected test's `max_iterations` margin substantially (e.g.
+`+500` -> `+3000`+ for the rejoin test, `+200` -> `+1500`+ for the
+commit-failure test) to absorb realistic contention-driven spin-wait
+duration, or restructure away from iteration-count-as-time-proxy
+entirely (e.g. a real condition/event the flush thread signals instead
+of polling `future.done()` via iteration count). Left for its own
+session with careful measurement (how large a margin actually drives
+the failure rate to ~0 under real contention, not a guessed number
+tacked on at the end of a long day) rather than a same-day patch on
+top of an already-long change.
