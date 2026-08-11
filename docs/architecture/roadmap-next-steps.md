@@ -2353,3 +2353,86 @@ implied against what already existed (Terraform Foundation, the
 7-module library, and today's earlier portability + partial-backend
 work were already done coming into this survey). No further Sprint 14
 work identified as missing in this pass.
+
+## Real AWS spend investigated (AWSDataTransfer, ~$19 of ~$30 today) -- root driver found and stopped, billing guardrails tightened
+
+**Trigger**: a real AWS bill check showed `AWSDataTransfer` as the single
+most expensive line item today (~$19 of ~$30 total), more than S3
+itself -- unexpected for a project whose Kafka is a local Docker
+container, not AWS-hosted.
+
+**Investigated, not assumed**: Cost Explorer's `get-cost-and-usage`
+returned `DataUnavailableException` for both a 2-day and a 30-day
+window -- no daily breakdown available (likely enabled too recently
+for the API to have ingested data yet), so the exact source couldn't
+be pinned down with certainty.
+
+**The real, structural finding**: `marketplace_batch_pipeline` (the
+real Airflow DAG -- Postgres extraction -> Databricks Full Pipeline ->
+dbt run/test --select gold) has been running on a real
+`schedule=timedelta(minutes=30)` **continuously since 2026-08-07**
+(commit `22377d5`) -- 4+ days of a real Databricks Full Pipeline firing
+every 30 minutes, unpaused, including at the moment this was noticed.
+This is a far more plausible sustained cost driver than any single
+day's manual investigation. **Paused** (`airflow dags pause
+marketplace_batch_pipeline`), confirmed live (`is_paused: True`) --
+the already-in-progress run at the time of pausing
+(`scheduled__2026-08-11T18:26:27`) was deliberately left to finish on
+its own rather than killed mid-flight (the spend already incurred
+isn't recovered by killing it, and interrupting mid-write risks a
+partial Bronze/Silver write needing its own investigation later) --
+confirmed pause doesn't cancel an already-running DagRun, only blocks
+future scheduled ones, matching standard Airflow behavior, verified
+live via `airflow tasks states-for-dag-run` showing the task still
+`running` after the pause took effect.
+
+**Two candidates raised and evaluated, both ruled out as
+`AWSDataTransfer` sources**: `kafka-console-consumer --from-beginning
+--max-messages 160000` (run yesterday during the `categories` outlier
+investigation) and the multiple consumer-group rejoins from repeated
+restarts -- both are 100% local Docker traffic (this project's Kafka
+is `confluentinc/cp-kafka` in `docker-compose`, not AWS MSK), never
+touch AWS at all, so neither can be an `AWSDataTransfer` source
+regardless of message volume.
+
+**Real, smaller candidates, not ruled out**: the local Spark session
+that pulled real multi-version Bronze `categories` rows for
+`_deduplicate_by_key` validation, and the 16-entity Bronze row-count
+validation, both from yesterday's Frente 3 close-out -- genuine S3-to-
+local reads, plausible secondary contributors, likely tens of MB
+rather than the dominant driver.
+
+**Practice adopted going forward, to avoid needing to reconstruct this
+after the fact again**: prefer processing/validating data *inside*
+AWS over pulling raw volume to the local terminal.
+- A `SELECT count(*)`/aggregate query in Athena computes server-side
+  and returns a tiny result -- not a local `deltalake`/`pyarrow` full-
+  table read.
+- Manual inspection of a real table uses `LIMIT`/a small sample, never
+  a full-table pull, unless the investigation specifically requires
+  every row (and even then, consider whether Athena/Databricks can do
+  the filtering server-side first).
+- `kafka-console-consumer`/local Spark reads against this project's
+  own local Kafka/Bronze are not an AWS cost concern by construction
+  (confirmed above) -- but any read that touches real S3/Athena/
+  CloudWatch data should default to "compute where the data already
+  lives," the same principle, not just a Kafka-specific rule.
+
+**Billing guardrails tightened, both confirmed live against real AWS
+state, not just "should be configured now":**
+- Cost Anomaly Detection: a monitor + subscription already existed
+  (created the same day, `Default-Services-Monitor`/
+  `Default-Services-Subscription`) but with a threshold of
+  `ANOMALY_TOTAL_IMPACT_ABSOLUTE >= $100 AND >= 40%` -- exactly why a
+  $19-30 spend never triggered anything. Updated to a single
+  `ANOMALY_TOTAL_IMPACT_ABSOLUTE >= $15` condition (the percentage
+  `AND` deliberately dropped, not just lowered -- keeping it could
+  still mask a real absolute-dollar anomaly depending on baseline
+  spend, and the goal here is specifically to catch a ~$15-20-class
+  spike). Email subscriber (`aroldobrancalhaojunior@gmail.com`)
+  already `CONFIRMED`.
+- AWS Budget: none existed. Created `mdp-monthly-budget`,
+  `$50`/month, `COST` type, 3 `ACTUAL` notifications (`>50%`, `>80%`,
+  `>100%`), all confirmed via `describe-notifications-for-budget` and
+  `describe-subscribers-for-notification` to have the same email
+  attached.
