@@ -590,24 +590,30 @@ data "aws_iam_policy_document" "airflow_ingest" {
     effect = "Allow"
 
     actions = [
-      # Same 5 actions as CloudWatchAirflowLogs above, same reason:
-      # watchtower.CloudWatchLogHandler calls CreateLogGroup
-      # defensively regardless of the group already existing --
-      # confirmed live with the Airflow handler (see that statement's
-      # own comment), reused here rather than re-discovering it.
-      # This identity's own AWS_ACCESS_KEY_ID/SECRET (the generic
-      # boto3-default names in infrastructure/docker/.env) is what
-      # scripts/run_postgres_extraction_once.py,
+      # Update, 2026-08-11 -- tightened to match
+      # CloudWatchDatabricksLogs' own least-privilege scope below
+      # (originally this statement had 5 actions, same as
+      # CloudWatchAirflowLogs, on the reasoning that watchtower calls
+      # CreateLogGroup defensively -- true for Airflow's own
+      # CloudwatchTaskHandler, confirmed live, but NOT true for this
+      # identity's actual caller: data_platform.observability.
+      # logging_config.py's CloudWatch handler passes
+      # create_log_group=False explicitly, so watchtower's own source
+      # (confirmed by reading it) never issues that call here. Same for
+      # DescribeLogStreams/GetLogEvents -- watchtower's write path never
+      # calls either; those two were only ever useful for an operator
+      # manually reading logs back with the AWS CLI, which uses a
+      # different credential (the personal terraform-admin key), not
+      # this identity. This identity's own AWS_ACCESS_KEY_ID/SECRET (the
+      # generic boto3-default names in infrastructure/docker/.env) is
+      # what scripts/run_postgres_extraction_once.py,
       # scripts/run_silver_catalog_registration_once.py and
       # airflow/config/bootstrap.py run under inside the Airflow
       # containers -- the three non-DAG-task callers of
-      # configure_logging() that can now ship to the platform log
-      # group (module.cloudwatch_platform, monitoring.tf).
-      "logs:CreateLogGroup",
+      # configure_logging() that ship to the platform log group
+      # (module.cloudwatch_platform, monitoring.tf).
       "logs:CreateLogStream",
-      "logs:DescribeLogStreams",
-      "logs:PutLogEvents",
-      "logs:GetLogEvents"
+      "logs:PutLogEvents"
     ]
 
     resources = [
@@ -743,16 +749,17 @@ data "aws_iam_policy_document" "bronze_consumer" {
     effect = "Allow"
 
     actions = [
-      # Same 5 actions/reasoning as airflow_ingest's own
-      # CloudWatchPlatformLogs statement above -- this identity's
-      # AWS_ACCESS_KEY_ID/SECRET (MDP_BRONZE_CONSUMER_*) is what
-      # scripts/run_bronze_consumer.py runs under, the fourth (and
-      # only long-running) configure_logging() caller.
-      "logs:CreateLogGroup",
+      # Update, 2026-08-11 -- same tightening and same reasoning as
+      # airflow_ingest's own CloudWatchPlatformLogs statement above
+      # (logging_config.py's CloudWatch handler passes
+      # create_log_group=False, watchtower's write path never calls
+      # DescribeLogStreams/GetLogEvents -- confirmed by reading it, not
+      # assumed). This identity's AWS_ACCESS_KEY_ID/SECRET
+      # (MDP_BRONZE_CONSUMER_*) is what scripts/run_bronze_consumer.py
+      # runs under, the fourth (and only long-running)
+      # configure_logging() caller.
       "logs:CreateLogStream",
-      "logs:DescribeLogStreams",
-      "logs:PutLogEvents",
-      "logs:GetLogEvents"
+      "logs:PutLogEvents"
     ]
 
     resources = [

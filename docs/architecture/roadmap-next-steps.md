@@ -1907,3 +1907,42 @@ unabridged `plan` shown before `apply`, per this session's explicit
 structurally different fix (partial backend configuration), not more
 `module.naming` instances.
 
+## `platform` CloudWatch IAM grant tightened to match `databricks`' least-privilege scope
+
+Follow-up to the Sprint 13 close-out entries above -- flagged there as
+a deliberate gap ("worth revisiting `platform`'s grant down to the
+same minimal set... not done here"), closed now. Both
+`CloudWatchPlatformLogs` statements (`mdp-airflow-ingest-dev` and
+`mdp-bronze-consumer-dev`, `security.tf`) had 5 actions
+(`CreateLogGroup`/`CreateLogStream`/`DescribeLogStreams`/
+`PutLogEvents`/`GetLogEvents`), copied from the pre-existing
+`CloudWatchAirflowLogs` statement's own reasoning (watchtower calls
+`CreateLogGroup` defensively) -- true for Airflow's own
+`CloudwatchTaskHandler`, but never actually true for this identity's
+real caller: `data_platform.observability.logging_config.py`'s
+CloudWatch handler passes `create_log_group=False` explicitly, and
+watchtower's own source (already read once building the `databricks`
+shipper) only calls `CreateLogGroup` when that flag is `True`.
+`DescribeLogStreams`/`GetLogEvents` were never exercised either --
+watchtower's write path never calls them; both are only useful for an
+operator reading logs back with the AWS CLI, a different credential
+(the personal key) entirely.
+
+**Fixed**: both statements reduced to `CreateLogStream`/
+`PutLogEvents` only, matching `CloudWatchDatabricksLogs`'s grant
+exactly. `terraform plan`, isolated via `-target` to just the 2
+affected `aws_iam_policy` resources, showed `0 to add, 2 to change, 0
+to destroy` (in-place JSON policy update, not a replace -- IAM policy
+*content* is mutable, unlike its `description`, see the entry above).
+Applied.
+
+**Validated live, not assumed safe**: restarted `bronze-consumer`
+(fresh `watchtower.CloudWatchLogHandler`, so `CreateLogStream` gets
+exercised for real, not just `PutLogEvents` on an already-open
+stream) -- no `"CloudWatch log shipping disabled"` warning anywhere in
+its logs, and a real new `"Bronze Consumer starting."` event confirmed
+landing in `/mdp/dev/platform` via `aws logs filter-log-events`.
+Separately, a real, concurrently-running `extract_postgres` task
+(`mdp-airflow-ingest-dev`, a completely independent process) shipped
+its own real events to the same log group in the same window --
+confirming the reduced grant works for both identities, not just one.
