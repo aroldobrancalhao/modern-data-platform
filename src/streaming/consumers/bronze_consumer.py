@@ -151,7 +151,24 @@ _MAX_POLL_BATCH_SIZE_OVERRIDES: dict[str, int] = {
     "inventories": 100,
 }
 
-_MAX_BATCH_AGE_SECONDS = 30.0
+# Raised from 30.0 (2026-08-11): this pipeline has no real-time
+# freshness requirement -- it's a portfolio/study project, streamed
+# traffic only ever comes from a manually-run simulator
+# (simulator_interval_seconds default 5s), and nothing downstream
+# consumes Bronze streaming data on a live SLA (Gold is built from the
+# separate batch flow, not this table). A low-volume entity used to
+# flush on this timeout well before filling _MAX_BATCH_SIZE, producing
+# one tiny Delta commit (+ transaction log entry) roughly every 30s of
+# real traffic regardless of how few records it held -- confirmed live
+# via real _delta_log commit timestamps (e.g. `carriers`, one of the
+# platform's smallest entities, flushing 15-90s apart). 300.0 (5
+# minutes) cuts that to at most one flush per 5 minutes of low-traffic
+# time -- roughly a 10x reduction in age-triggered commits -- without
+# touching _MAX_BATCH_SIZE, so the _FLUSH_POOL_SIZE memory budget
+# above (sized around a 100-record max per-flush footprint) is
+# completely unaffected. See docs/architecture/roadmap-next-steps.md
+# for the real object-count investigation this responds to.
+_MAX_BATCH_AGE_SECONDS = 300.0
 
 # How long a single consume_batch() call blocks waiting for at least
 # one message before returning empty-handed. 1.0s was safe when every

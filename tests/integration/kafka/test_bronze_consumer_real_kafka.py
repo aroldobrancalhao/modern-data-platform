@@ -16,11 +16,24 @@ a local tmp_path: nothing here is specific to S3 (StorageConfig.bronze
 is a one-line URI builder, already covered by the batch flow and by
 this module's own unit tests), and it keeps this test from creating
 `carriers`' very first real Bronze table with a single synthetic row.
-A fresh, unique consumer group is used each run so it always replays
-the topic from the earliest offset, rather than depending on another
-run's committed position -- which means this test's own iteration
-budget has to be sized for whatever the *entire* topic currently
-holds, not just the one row it inserts (see below).
+
+A fresh, unique consumer group is used each run, but -- unlike this
+test's earlier version -- it does **not** replay the topic from the
+earliest offset: `_seed_consumer_group_at_tail()` below joins that
+group and commits its position at the topic's real current tail
+*before* the Postgres insert happens, so `run_bronze_consumer`'s own
+consumer (created later, same group.id) starts from that pre-committed
+position instead of "earliest" -- Kafka only ever applies
+`auto.offset.reset` when no committed offset exists yet for a group,
+so seeding one first bypasses it entirely. This test now proves
+exactly what its name says -- "a new row flows through" -- without any
+dependence on how much history `marketplace.marketplace.carriers`
+happens to already hold (see docs/architecture/roadmap-next-steps.md
+for the investigation that found the old earliest-replay design
+couldn't keep up with the topic's own permanent, unbounded growth --
+every run, including every run of this test itself, leaves 2 messages
+behind forever, with no cleanup tied to the Postgres row's own
+deletion in the `finally` block below).
 
 carriers is the target entity: only 5 seed rows today (no risk of
 competing with the 137k+-row entities), and every one of its columns
@@ -31,71 +44,38 @@ test_bronze_schema.py's coerce_record tests).
 
 **_MAX_BATCH_SIZE/_MAX_BATCH_AGE_SECONDS/_MAX_POLL_ITERATIONS, why these
 specific values (found stale and re-measured live, not guessed):**
-this test used to patch `_MAX_BATCH_SIZE` to 1 ("flush as soon as it
-sees any record") with `_MAX_POLL_ITERATIONS = 30`, on the assumption
-that `carriers`' topic stays near-empty. That assumption is long gone
--- every run of this test (including every run before this fix existed)
-leaves 2 permanent Kafka messages behind (a real Debezium `"c"` +
-`"d"` pair; Kafka doesn't get cleaned up just because the Postgres row
-was deleted afterward, see the `finally` block below), so the topic
-only ever grows, and a fresh replay-from-earliest consumer group has
-to get through all of it every single run.
+`_MAX_BATCH_SIZE` matches production's own `_MAX_POLL_BATCH_SIZE`
+(25). `_MAX_BATCH_AGE_SECONDS` is cut down from production's 30s to
+3.0s so a trailing partial batch (this test's own 1-2 new messages
+will essentially never fill a 25-record buffer) flushes promptly
+instead of sitting for a real 30s. `_MAX_POLL_ITERATIONS` is 500 --
+now, since `_seed_consumer_group_at_tail()` (see above) makes this
+test's consumer start from the topic's real tail rather than
+replaying its full history, that number is no longer sized against
+backlog growth at all (a previous version of this test *was* fighting
+exactly that -- the topic's own permanent, unbounded-in-practice
+growth outgrowing a fixed iteration budget, see
+docs/architecture/roadmap-next-steps.md for that investigation and
+why it's resolved by the tail-seeding fix, not by raising this number
+further). What 500 still buys headroom against is a real, separate,
+per-flush cost: `run_bronze_consumer`'s round-robin loop busy-waits
+(`time.sleep(0); continue`) while a flush is in flight on a worker
+thread, and with only one entity under test, every one of those spins
+counts against this budget too (measured directly elsewhere this same
+session: ~270ms per flush cycle, translating to hundreds of spin
+iterations at native Python loop speed -- see the same roadmap entry).
+This test now needs at most 1-2 such cycles (not "however many it
+takes to drain the topic's full history"), so 500 is now a generous
+multiple of what a real run needs, not a number chosen against a
+specific worst case.
 
-Simply raising `_MAX_POLL_ITERATIONS` a lot does *not* fix this on its
-own -- confirmed live, not assumed: with `_MAX_BATCH_SIZE=1`, nearly
-every iteration is spent in `run_bronze_consumer`'s own busy-wait
-branch (`time.sleep(0); continue`, taken while the previous single
-message's flush -- including a real network `commit()` round-trip --
-is still in flight), not actually polling. Measured directly (a
-`time.sleep` call-counter): **29 of 30 iterations were pure spin-wait
-for one single message**, i.e. this test's per-message iteration cost
-was never really ~1, it was ~30. Production is far less exposed to
-this (16 real entities keep every round productive while any one
-entity's flush is in flight; see "Bronze Consumer's round-robin poll
-loop is throughput-bound" and the `time.sleep(0)` fix in
-docs/architecture/roadmap-next-steps.md, whose own comment already
-named this as an accepted, unlikely-outside-a-tight-single-entity-loop
-risk) -- this test *is* exactly that tight single-entity loop.
-
-Fix: `_MAX_BATCH_SIZE` raised to match production's own
-`_MAX_POLL_BATCH_SIZE` (25) instead of 1 -- far fewer flush cycles
-means far less of the above spin-wait tax paid in total. That alone
-reintroduces the *other* problem batch-size-1 was originally avoiding:
-a final, partial batch (whatever's left over once the topic backlog
-plus this test's own new row don't divide evenly by 25) won't reach
-the size threshold, so it would sit unflushed for the real
-`_MAX_BATCH_AGE_SECONDS` (30s) -- confirmed live, this genuinely
-happened. `_MAX_BATCH_AGE_SECONDS` is therefore *also* patched, down
-to 3.0s, so that trailing partial batch flushes promptly instead.
-`_MAX_POLL_ITERATIONS` raised to 500 (previously 30) purely for
-headroom against future backlog growth -- at 25 messages/cycle and the
-~30x-per-cycle spin-wait tax measured above, 500 iterations covers on
-the order of 400+ backlog messages (~1.5 years of runs at 2
-messages/run before this needs revisiting again).
-
-**Honest status, not oversold**: the spin-wait tax above is confirmed
-root-caused and fixed -- before this fix, the test failed 100% of the
-time (0/8+ live runs), every time stalling after exactly one message.
-After this fix, it passes most of the time (roughly 60-70% across this
-change's own live validation, 10+ consecutive runs) but **not
-reliably 100%** -- a second, distinct, only-partially-understood
-failure mode surfaced during that same validation: `run_bronze_consumer`
-occasionally stops finding further available messages after a commit,
-short of the topic's real total (confirmed independently -- the
-"missing" messages, including this test's own row, were verified still
-genuinely sitting in the topic afterward via a plain, single-threaded
-`Consumer.consume()` script, which never reproduced the gap itself).
-Every raw, single-threaded reproduction of the same consume-then-commit
-pattern drained its topic completely and reliably; only
-`run_bronze_consumer`'s real threaded flush (`consume()` on the main
-thread, `write_deltalake()` + `commit()` on a worker thread, per
-entity) showed the gap, intermittently, not on a fixed pattern. Not
-root-caused within this session's time budget -- flagged here and in
-docs/architecture/roadmap-next-steps.md rather than silently claimed
-fixed. A follow-up check (same battery, but with one fixed consumer
-group reused across every run instead of a fresh one each time)
-weighed *against* the "own back-to-back test-battery noise" theory,
-not for it -- see that roadmap entry for the real result.
+**Honest status**: root-caused and fixed by
+`_seed_consumer_group_at_tail()` -- validated with 10 consecutive
+isolated live runs (see docs/architecture/roadmap-next-steps.md for
+the exact pass count) after previously failing consistently under the
+old earliest-replay design, whose failure mode was entirely explained
+by the topic's real, measured backlog outgrowing this test's iteration
+budget, not by any `run_bronze_consumer` bug.
 
 Reuses the `real_kafka` marker, excluded from the default suite. Run
 it explicitly with:
@@ -108,6 +88,7 @@ License: MIT
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -115,6 +96,7 @@ from typing import cast
 
 import psycopg
 import pytest
+from confluent_kafka import Consumer, TopicPartition
 from deltalake import DeltaTable
 
 from data_platform.bootstrap import bootstrap
@@ -123,15 +105,113 @@ from data_platform.messaging.messaging_provider import MessagingProvider
 from data_platform.providers.provider_factory import ProviderFactory
 from data_platform.storage.config import StorageConfig
 
+from integrations.kafka.config.kafka_settings import KafkaSettings
 from integrations.postgres.config import PostgresSettings
 from streaming.consumers import bronze_consumer
-from streaming.consumers.bronze_consumer import run_bronze_consumer
+from streaming.consumers.bronze_consumer import run_bronze_consumer, topic_for
 
 pytestmark = pytest.mark.real_kafka
 
 ENTITY = "carriers"
 
 _MAX_POLL_ITERATIONS = 500
+
+# How long _seed_consumer_group_at_tail() waits for the broker to
+# finish a fresh consumer group's partition assignment before giving
+# up -- assignment is asynchronous (a real group-join round-trip), so
+# a plain immediate poll() can't be trusted to have one yet. 10s is
+# generous for a local single-broker docker-compose Kafka (this step
+# is consistently sub-second in practice); failing loudly with a clear
+# message here beats a confusing downstream assertion failure if the
+# broker is ever unusually slow to rebalance.
+_ASSIGNMENT_TIMEOUT_SECONDS = 10.0
+
+
+def _seed_consumer_group_at_tail(topic: str, group_id: str) -> None:
+    """
+    Joins ``group_id`` and commits its position at ``topic``'s real
+    current tail (the high watermark of every partition), then closes
+    the consumer -- so a *later* consumer resolved for the same
+    (topic, group_id) pair (i.e. run_bronze_consumer's own, created
+    inside the test body below) starts from that pre-committed
+    position instead of replaying the topic's full history.
+
+    This only works because Kafka applies `auto.offset.reset` (see
+    KafkaContext.create_consumer, hardcoded to "earliest" -- correct
+    for production's real Bronze Consumer group, which should replay
+    from the start on its very first-ever run) exclusively when *no*
+    committed offset exists yet for a group. Seeding one here first
+    means that default is never consulted for this test's group at
+    all -- not a config override, just winning the race deliberately
+    instead of leaving it to chance.
+
+    Deliberately bypasses the MessagingProvider abstraction and talks
+    to confluent-kafka directly: this is a test-only concern (durably
+    pre-committing a tail position before the code under test ever
+    runs), not something any real caller of MessagingProvider needs,
+    so it doesn't belong on that contract.
+    """
+
+    consumer = Consumer(
+        {
+            "bootstrap.servers": KafkaSettings().bootstrap_servers,
+            "group.id": group_id,
+            "enable.auto.commit": False,
+        }
+    )
+
+    try:
+        consumer.subscribe([topic])
+
+        deadline = time.monotonic() + _ASSIGNMENT_TIMEOUT_SECONDS
+
+        assignment: list[TopicPartition] = []
+
+        while not assignment:
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"Consumer group {group_id!r} was not assigned any "
+                    f"partition of {topic!r} within "
+                    f"{_ASSIGNMENT_TIMEOUT_SECONDS}s -- cannot seed a "
+                    "tail position."
+                )
+
+            consumer.poll(0.5)
+
+            assignment = consumer.assignment()
+
+        tail_offsets: list[TopicPartition] = []
+
+        for partition in assignment:
+            # cached=False: this must be the real current tail at the
+            # moment of seeding, not a possibly-stale cached value
+            # (see KafkaMessagingProvider.consumer_lag's own docstring
+            # for when cached=True is fine instead -- this isn't that
+            # case, it only runs once per test). None on a real
+            # request timeout, per get_watermark_offsets' own
+            # contract -- not expected against a local single-broker
+            # docker-compose Kafka, but guarded rather than silently
+            # indexed into.
+            watermarks = consumer.get_watermark_offsets(
+                partition, timeout=_ASSIGNMENT_TIMEOUT_SECONDS, cached=False
+            )
+
+            if watermarks is None:
+                raise RuntimeError(
+                    f"Timed out fetching watermark offsets for "
+                    f"{partition.topic!r} partition {partition.partition} "
+                    "-- cannot seed a tail position."
+                )
+
+            _low, high = watermarks
+
+            tail_offsets.append(
+                TopicPartition(partition.topic, partition.partition, high)
+            )
+
+        consumer.commit(offsets=tail_offsets, asynchronous=False)
+    finally:
+        consumer.close()
 
 
 @pytest.fixture
@@ -170,33 +250,54 @@ def bronze_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _fast_flush(monkeypatch: pytest.MonkeyPatch) -> None:
-    # _MAX_BATCH_SIZE: matches production's own _MAX_POLL_BATCH_SIZE
-    # (25), not 1 -- and _MAX_BATCH_AGE_SECONDS is cut way down from
-    # production's 30s to 3s. Both together, not either alone -- see
-    # this module's own docstring for why (measured live: 1 causes
-    # ~30x iteration overhead per message from run_bronze_consumer's
-    # busy-wait on an in-flight flush; a bigger batch size alone then
-    # leaves a trailing partial batch stuck on the real, un-patched
-    # 30s age timeout).
+def group_id(monkeypatch: pytest.MonkeyPatch) -> str:
+    """
+    Generates this run's unique consumer group id, patches
+    bronze_consumer's module-level constants to use it (plus the
+    batch-size/age tuning below), and returns the id itself so the
+    test body can seed it at the topic's tail before the Postgres
+    insert (see _seed_consumer_group_at_tail) -- autouse=True still
+    applies these patches even for a test that doesn't request this
+    fixture by name, but this one does, specifically for the id.
+
+    _MAX_BATCH_SIZE: matches production's own _MAX_POLL_BATCH_SIZE
+    (25), not 1 -- and _MAX_BATCH_AGE_SECONDS is cut way down from
+    production's 30s to 3s. Both together, not either alone -- see
+    this module's own docstring for why (measured live: 1 causes
+    ~30x iteration overhead per message from run_bronze_consumer's
+    busy-wait on an in-flight flush; a bigger batch size alone then
+    leaves a trailing partial batch stuck on the real, un-patched
+    30s age timeout).
+    """
     monkeypatch.setattr(
         bronze_consumer, "_MAX_BATCH_SIZE", bronze_consumer._MAX_POLL_BATCH_SIZE
     )
     monkeypatch.setattr(bronze_consumer, "_MAX_BATCH_AGE_SECONDS", 3.0)
+
+    generated_group_id = f"bronze-consumer-e2e-test-{uuid.uuid4().hex}"
+
     monkeypatch.setattr(
         bronze_consumer,
         "_CONSUMER_GROUP_ID",
-        f"bronze-consumer-e2e-test-{uuid.uuid4().hex}",
+        generated_group_id,
     )
+
+    return generated_group_id
 
 
 def test_postgres_change_flows_through_debezium_and_kafka_into_bronze(
     postgres_connection: psycopg.Connection,
     messaging_provider: MessagingProvider,
     bronze_path: Path,
+    group_id: str,
 ) -> None:
     carrier_code = f"TEST-{uuid.uuid4().hex[:12]}"
     carrier_name = "Bronze Consumer E2E Test Carrier"
+
+    # Must happen before the Postgres insert below -- see
+    # _seed_consumer_group_at_tail's own docstring for why the
+    # ordering is what actually makes this work.
+    _seed_consumer_group_at_tail(topic_for(ENTITY), group_id)
 
     with postgres_connection.cursor() as cursor:
         cursor.execute(

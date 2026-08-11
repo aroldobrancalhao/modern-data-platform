@@ -641,6 +641,19 @@ def test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure(
     """
     monkeypatch.setattr(bronze_consumer.time, "monotonic", _FakeClock())
 
+    # Decoupled from the real production value (see
+    # test_bronze_consumer_real_kafka.py's own precedent for patching
+    # this same constant) -- this test's max_iterations budget below
+    # is sized around how many _FakeClock ticks it takes to cross this
+    # threshold, so leaving it at production's real value made the
+    # test silently fragile against nothing more than a future tuning
+    # change to _MAX_BATCH_AGE_SECONDS itself (confirmed live: raising
+    # it 30 -> 300 for the "no real-time freshness need" streaming
+    # commit-volume fix flipped this test to fail ~60% of the time
+    # under full-suite contention -- not a real regression, just this
+    # coupling -- see docs/architecture/roadmap-next-steps.md).
+    monkeypatch.setattr(bronze_consumer, "_MAX_BATCH_AGE_SECONDS", 5.0)
+
     provider = FakeMessagingProvider()
     topic = topic_for("orders")
     key = (topic, bronze_consumer._CONSUMER_GROUP_ID)
@@ -681,13 +694,13 @@ def test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure(
     # flushes complete (the first batch's failed-then-abandoned one,
     # then the second batch's successful one) under real CPU
     # contention, and the second one only fires via the fake clock's
-    # own age-based threshold (_MAX_BATCH_AGE_SECONDS=30, unpatched
-    # here unlike the real_kafka integration test), which alone needs
-    # ~30+ iterations before is_due() ever returns True for it.
-    # Confirmed flaky at "+200" when run as part of the full suite
-    # (CPU contention from ~450 other tests) even though it passed
-    # reliably in isolation every time -- same class of margin
-    # sensitivity already documented on
+    # own age-based threshold (_MAX_BATCH_AGE_SECONDS, patched to 5.0
+    # above precisely so this budget doesn't have to track production's
+    # real value), which alone needs ~5+ iterations before is_due()
+    # ever returns True for it. Confirmed flaky at "+200" when run as
+    # part of the full suite (CPU contention from ~450 other tests)
+    # even though it passed reliably in isolation every time -- same
+    # class of margin sensitivity already documented on
     # test_batch_write_failure_leaves_offsets_uncommitted_and_retries
     # above, just needing more headroom here for the extra flush cycle.
     run_bronze_consumer(
