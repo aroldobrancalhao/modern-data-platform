@@ -2735,3 +2735,95 @@ old file it superseded, and VACUUM hasn't removed any of those old
 files yet (see above). The real drop -- back down toward roughly 16
 files total instead of ~64,800 -- only shows up in this same
 measurement once VACUUM is re-run on or after 2026-08-18.
+
+## New capability: `bronze_streaming_maintenance` Airflow DAG -- daily OPTIMIZE + VACUUM automated, supersedes the manual one-off run above
+
+Follow-up to the manual OPTIMIZE+VACUUM entry above: that was a
+one-off run against the state `bronze/` had accumulated up to today.
+This closes the loop -- an automated, scheduled DAG that keeps doing
+it, so `bronze/`'s object count doesn't quietly grow back to
+tens of thousands of tiny files again over the next weeks of real
+streaming traffic.
+
+**IAM, confirmed before deciding, not assumed**: read
+`mdp-bronze-consumer-dev`'s real policy first (`security.tf`) -- it
+deliberately has no `s3:DeleteObject` (its own comment: "It never
+deletes, compacts or vacuums its own table," confirmed correct by
+reading `bronze_consumer.py`'s call graph). VACUUM needs delete.
+Rather than widen the streaming consumer's own long-running
+credential (the opposite of this project's least-privilege pattern
+everywhere else), created a new dedicated identity,
+`mdp-bronze-maintenance-dev` (Terraform `module.bronze_maintenance`,
+`environments/dev/security.tf`): `s3:ListBucket` (conditioned to the
+`bronze/*` prefix) + `s3:GetObject`/`PutObject`/`DeleteObject`
+(resource `bronze/*`) -- nothing else, no access to `bronze_batch/`,
+`silver/`, `gold/`, or `raw/`. `terraform plan` showed exactly `4 to
+add, 0 to change, 0 to destroy` before applying. Credential captured
+via `terraform output -raw` straight into `infrastructure/docker/.env`
+(`MDP_BRONZE_MAINTENANCE_ACCESS_KEY_ID`/`SECRET_ACCESS_KEY`), never
+printed to a terminal -- same pattern as every other credential this
+project has ever wired in.
+
+**DAG**: `airflow/dags/bronze_streaming_maintenance.py`, `dag_id
+bronze_streaming_maintenance`, `schedule=timedelta(days=1)` (not an
+`@daily`/cron string -- no cron precedent anywhere in this project's
+DAGs, and a plain `timedelta` was already preferred once for exactly
+this readability reason, see the reverted
+`marketplace_batch_pipeline` schedule entry above), `start_date=
+datetime(2026, 1, 1)`, `catchup=False`. Two sequential `@task`s,
+`optimize_bronze() >> vacuum_bronze(...)` (TaskFlow's own XCom-based
+dependency inference, not an explicit `>>` alongside a second call --
+that would've created a duplicate, disconnected task instance, caught
+before deploying). Both loop over all 16
+`streaming.consumers.bronze_consumer.STREAMING_ENTITIES`, aggregate
+per-entity errors into a single `RuntimeError` at the end rather than
+letting one bad entity silently swallow the other 15 (same pattern as
+`optimize_bronze.ipynb`'s own error handling). AWS credentials passed
+explicitly via `storage_options` on each `DeltaTable` call, not
+exported into the task's `os.environ` -- this DAG is the only caller
+that should ever exercise delete access against this table.
+
+**Why daily for both tasks, not weekly for VACUUM**: the actual safety
+mechanism is `retention_hours=168` (kept exactly as validated
+manually above, `enforce_retention_duration=True`, no override) --
+checked fresh on every single run, independent of how often the DAG
+itself fires. Running VACUUM daily instead of weekly doesn't change
+that safety margin at all; it only bounds how long a file that has
+already crossed the 7-day mark sits around physically unreclaimed
+before the next run notices it -- at most ~1 extra day instead of up
+to 6.
+
+**Deployed and tested for real, not just "should work":**
+- `docker compose up -d` recreated every `airflow-*` service so the
+  new env vars actually land (bind-mounted `airflow/dags/` already
+  picks up new DAG files live, but env vars are only read at container
+  creation) -- `airflow dags list-import-errors`: `No data found`.
+- Unpausing the DAG (required -- new DAGs default to paused) also
+  triggered its own first real `scheduled__...` run immediately,
+  since `start_date` is already in the past and `catchup=False` still
+  creates the *current* eligible interval's run, just not every missed
+  one since `start_date` -- this is expected, correct behavior for a
+  DAG that's actually meant to run automatically (unlike
+  `marketplace_batch_pipeline`, which was deliberately reverted away
+  from exactly this). Both the automatic `scheduled__2026-08-11T22:19:36`
+  run and a separate manual `airflow dags trigger` run
+  (`manual__2026-08-11T22:20:22`) finished `success`.
+- Real task logs (not re-run, not inferred) confirm both tasks logged
+  a line for all 16 entities each: `optimize_bronze` -- `0 file(s)
+  added, 0 file(s) logically removed` everywhere (correctly idempotent
+  -- the table was already compacted by this same day's manual run,
+  nothing new to compact yet); `vacuum_bronze` -- `0 file(s) physically
+  deleted (retention_hours=168)` everywhere, ending with `"VACUUM
+  complete: 0 file(s) physically deleted across 16 entities."`
+  Explained plainly in the log itself, not hidden or mistaken for a
+  failure -- exactly the expected steady state until 2026-08-18 (see
+  the manual-run entry above for why).
+
+**Supersedes, not replaces the history of**: the one-off manual
+OPTIMIZE+VACUUM run documented in the entry above this one. That
+entry's exact reusable command (a standalone script + region env
+vars) is no longer the way this gets done going forward -- this DAG
+is -- but the entry itself stays as the real record of the first,
+manually-validated run and the reasoning that shaped this DAG's
+design (retention window, why `dry_run=False` didn't need its own
+dry-run step here, the real dates involved).
