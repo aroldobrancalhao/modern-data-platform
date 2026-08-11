@@ -2260,3 +2260,35 @@ none). When picked up: same discipline as Telegram above --
   `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`).
 - A forced real alert, confirmed delivered by checking the actual
   inbox -- not "the Test button said OK" and not "should work".
+
+## Sprint 14 (Infrastructure as Code), item 1: real state locking -- native S3, not DynamoDB
+
+Investigated before building anything, per this session's own
+discipline: `terraform version` confirmed `1.15.8` installed. Official
+S3 backend docs confirm `use_lockfile` (S3 conditional-write locking,
+a real `.tflock` object next to the state file) has been generally
+available since Terraform 1.11, and **DynamoDB-based locking is
+officially deprecated as of this version, slated for removal**. The
+original plan for this item (a new DynamoDB table module) was based on
+an outdated assumption -- corrected before building anything, not
+after. `use_lockfile = true` added to both `backend-dev.hcl` files
+(`bootstrap/`, `environments/dev/`) -- zero new AWS resources, zero
+new IAM.
+
+**Reconfigured cleanly, same safe process as the earlier backend-
+partial-config work**: `terraform init -backend-config=backend-dev.hcl
+-reconfigure -input=false` in both roots -- both reported
+`"Successfully configured the backend"`, no migration language, no
+prompt.
+
+**Validated live with a real concurrency race, not a simulated one**:
+backgrounded a real `terraform apply` (`environments/dev`, 62
+resources) and immediately ran a second `terraform plan` in the
+foreground against the same state. The foreground `plan` won the race
+and completed cleanly (`"No changes"`); the backgrounded `apply`
+failed with a **real S3 `PreconditionFailed` conditional-write error**
+and a full `Lock Info` block (real lock ID, path, operation type,
+holder, timestamp) -- direct proof `use_lockfile` is enforcing mutual
+exclusion, not a hypothetical. A follow-up clean `terraform plan`
+confirmed no lock was left orphaned after the failed `apply` --
+state remained fully accessible.

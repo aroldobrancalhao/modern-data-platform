@@ -11,3 +11,9 @@
 bucket = "mdp-tfstate-857854758128"
 key    = "bootstrap/terraform.tfstate"
 region = "sa-east-1"
+
+# State locking, Sprint 14 -- same reasoning as
+# environments/dev/backend-dev.hcl's own comment: native S3 locking
+# (use_lockfile), not DynamoDB (deprecated as of the installed
+# Terraform version, 1.15.8). Zero new AWS resources.
+use_lockfile = true
