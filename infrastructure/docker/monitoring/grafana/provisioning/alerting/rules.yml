@@ -1,0 +1,159 @@
+# Modern Data Platform
+#
+# Sprint 13 close-out, part 4. 4 alert rules, one per real signal
+# already on the Pipeline Health dashboard (../dashboards/json/
+# gold-layer-pipeline-health.json) -- every expr here is one already
+# validated live against real Prometheus data while building that
+# dashboard, not a new, unverified query. See
+# docs/architecture/roadmap-next-steps.md for the real evaluation
+# states confirmed via the Grafana alerting API after provisioning,
+# and contactpoints.yml for why notification delivery itself is not
+# validated (no real channel exists in this dev environment).
+#
+# datasourceUid PBFA97CFB590B2093 -- the real, already-existing
+# Prometheus datasource uid on this instance (see
+# ../datasources/prometheus.yml's own comment for why this isn't a
+# portable, provisioning-assigned uid). "-100" is Grafana's reserved
+# pseudo-datasource uid for expressions (threshold/reduce/math), not a
+# real datasource.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: mdp-pipeline-alerts
+    folder: Modern Data Platform
+    interval: 1m
+    rules:
+      - uid: mdp-pipeline-stale
+        title: extract_postgres pipeline is stale
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: PBFA97CFB590B2093
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: time() - mdp_pipeline_last_run_timestamp_seconds{job="extract_postgres"}
+          - refId: B
+            datasourceUid: "-100"
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    # 5400s = 90min -- 3x marketplace_batch_pipeline's
+                    # own 30-min schedule (schedule=timedelta(minutes=30),
+                    # see that DAG's docstring), margin enough to not
+                    # false-positive on one slow run.
+                    params: [5400]
+        for: 5m
+        labels:
+          severity: critical
+          source: processing-framework
+        annotations:
+          summary: "extract_postgres hasn't completed a real run in over 90 minutes."
+        noDataState: NoData
+        execErrState: Error
+
+      - uid: mdp-airflow-scheduler-stalled
+        title: Airflow scheduler heartbeat stalled
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: PBFA97CFB590B2093
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: rate(airflow_scheduler_heartbeat_total[5m])
+          - refId: B
+            datasourceUid: "-100"
+            relativeTimeRange: { from: 600, to: 0 }
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    # Real counter, real rate -- a genuinely alive
+                    # scheduler heartbeats far more than 0.01/s
+                    # (confirmed live: 1515 cumulative heartbeats
+                    # observed in this session alone). Not an exact
+                    # ==0 comparison, avoids float-precision noise.
+                    params: [0.01]
+        for: 5m
+        labels:
+          severity: critical
+          source: airflow
+        annotations:
+          summary: "airflow_scheduler_heartbeat_total stopped incrementing -- the scheduler itself may be down, not just idle."
+        noDataState: Alerting
+        execErrState: Error
+
+      - uid: mdp-bronze-write-failures
+        title: Bronze Consumer write failures
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: PBFA97CFB590B2093
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: sum(increase(mdp_bronze_write_failures_total[15m]))
+          - refId: B
+            datasourceUid: "-100"
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        for: 0m
+        labels:
+          severity: warning
+          source: bronze-consumer
+        annotations:
+          summary: "At least one write_deltalake() call to Bronze failed in the last 15 minutes."
+        noDataState: OK
+        execErrState: Error
+
+      - uid: mdp-airflow-task-failures
+        title: Airflow task failures
+        condition: B
+        data:
+          - refId: A
+            datasourceUid: PBFA97CFB590B2093
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              refId: A
+              instant: true
+              expr: sum(increase(airflow_task_finish_total{state="failed"}[15m]))
+          - refId: B
+            datasourceUid: "-100"
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        for: 0m
+        labels:
+          severity: warning
+          source: airflow
+        annotations:
+          summary: "At least one Airflow task instance failed in the last 15 minutes -- see the task's real log (CloudWatch /mdp/dev/airflow, or the local airflow/logs mount) for which one."
+        noDataState: OK
+        execErrState: Error

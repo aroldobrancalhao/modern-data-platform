@@ -1,0 +1,13 @@
+# Modern Data Platform
+#
+# Sprint 13 close-out, part 4. Routes every alert rule's default
+# policy to mdp-webhook-placeholder (see contactpoints.yml in this
+# same directory for why that contact point doesn't actually deliver
+# anywhere yet).
+
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: mdp-webhook-placeholder
+    group_by: ["grafana_folder", "alertname"]

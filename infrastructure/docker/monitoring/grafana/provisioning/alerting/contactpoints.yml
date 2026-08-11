@@ -1,0 +1,31 @@
+# Modern Data Platform
+#
+# Sprint 13 close-out, part 4. This dev environment has no real
+# notification channel configured (no SMTP, no Slack webhook, no
+# PagerDuty) -- confirmed by checking, not assumed: `docker-compose.yml`
+# never sets any SMTP_*/Slack env var, and there's no equivalent to
+# AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN for a notification target anywhere
+# in this repo.
+#
+# mdp-webhook-placeholder deliberately points at a URL nothing is
+# listening on (localhost:1 -- a port real services never bind, so the
+# failure is immediate and unambiguous rather than a slow timeout).
+# This makes alert *rule evaluation* (does the condition correctly
+# detect a real problem against real Prometheus data) fully real and
+# validated live -- see roadmap-next-steps.md -- while being explicit
+# that notification *delivery* is NOT validated and will NOT actually
+# reach anyone until a real channel is configured here. Structural
+# completeness (every rule needs a route to a contact point) without
+# faking a working delivery channel that doesn't exist in this
+# environment.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: mdp-webhook-placeholder
+    receivers:
+      - uid: mdp-webhook-placeholder-uid
+        type: webhook
+        settings:
+          url: http://localhost:1/no-real-channel-configured-yet
