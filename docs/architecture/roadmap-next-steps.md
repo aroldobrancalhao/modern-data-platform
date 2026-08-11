@@ -1723,4 +1723,154 @@ before the final passing run:**
 dashboards (only the Prometheus datasource is provisioned today, no
 dashboard JSON) and alerting (no `rule_files`/Alertmanager, no Grafana
 unified-alerting rules). This entry closes out the "5 unwired log
-groups" sub-item only.
+groups" sub-item only. See the next two entries for both of those.
+
+## Sprint 13 close-out, part 2: Grafana Pipeline Health dashboard, config-as-code
+
+Same session, picked up right after the log-groups close-out above.
+First real Grafana dashboard, provisioned as JSON
+(`infrastructure/docker/monitoring/grafana/provisioning/dashboards/`,
+`dashboard.yml` + `json/gold-layer-pipeline-health.json`,
+`allowUiUpdates: false`) -- same "config as code" discipline the
+Metabase `Gold Layer Overview` dashboard already established
+(`dashboards/metabase/*.sql`, not built through the UI). 11 panels
+across all 3 real metric sources this project has
+(`data_platform.processing.metrics.prometheus_metrics_hook`, Bronze
+Consumer, Airflow via statsd-exporter).
+
+**Every panel's PromQL was built against real metric/label names
+confirmed live first, via the Prometheus HTTP API
+(`/api/v1/label/__name__/values`, `/api/v1/query`), not guessed from
+the instrumentation code or the mapping config alone.** This caught
+real discrepancies before they became broken panels:
+- `airflow_pool_open_slots`/`queued_slots`/`running_slots` genuinely
+  are labeled (`{pool="catalog"}` etc.) as `statsd-exporter/
+  mapping.yml` intends -- confirmed by querying with labels, not just
+  listing `__name__` values (a bare name listing initially looked like
+  these were *unlabeled* aggregates, because Prometheus also always
+  keeps the label-less catch-all series alongside the labeled ones;
+  querying with `{pool=...}` present was what actually settled it).
+- `airflow_task_duration_seconds`/`airflow_task_finish_total`/
+  `airflow_dagrun_duration_success_seconds` all carry real
+  `dag_id`/`task_id`/`state`/`quantile` labels, confirmed the same
+  way.
+- `mdp_bronze_consumer_lag` and the other 4 Bronze Consumer metrics
+  had **zero current samples** at query time -- not a bug, the
+  container had just been restarted (Sprint 13 part 1's own
+  validation work) and the simulator isn't running (see
+  `docs/environment-inventory.md`), so no new Kafka messages had
+  flowed since the fresh process's Prometheus registry reset. A 7-day
+  range query (`metric[7d]`) confirmed all 16 real entity series exist
+  with thousands of historical samples each -- the dashboard's queries
+  are correct, there just wasn't live data at that exact moment.
+
+**A real, live-caught mistake, not a hypothetical one:** tried pinning
+the Prometheus datasource's `uid` to an explicit `"prometheus"` value
+in `datasources/prometheus.yml`, specifically so the dashboard JSON's
+`datasource.uid` references would be reproducible/portable rather than
+depending on whatever id Grafana happened to auto-assign. Broke
+Grafana startup outright against this real, already-running instance:
+`docker compose restart grafana` (itself blocked the first time by the
+zombie-PID-1 issue below, need to be recreated instead) came back with
+every module failing to start, root cause `"Datasource provisioning
+error: data source not found"`. Root cause, confirmed via the
+container's own logs, not guessed: `grafana_data` is a persistent
+Docker volume, and this datasource was already created weeks ago
+(Decision 4, the original Prometheus+Grafana sprint) under Grafana's
+own auto-generated `uid` -- file-based datasource provisioning matches
+by `name` to update an existing datasource, but changing its `uid`
+this way isn't supported; the mismatch between the file's new uid and
+the database's stored one broke the whole provisioning module, which
+several other Grafana modules depend on to start at all. **Fixed**:
+reverted the `uid: prometheus` line. The dashboard JSON instead
+hardcodes the datasource's real, already-assigned uid
+(`PBFA97CFB590B2093`, read via `GET /api/datasources`) -- less
+elegant than a clean, provisioning-assigned constant, but accurate to
+what actually exists on this instance. A fresh `docker compose up`
+against an empty volume would auto-assign a uid on first boot too, so
+this specific failure mode is really only a risk when re-provisioning
+an *existing*, already-populated instance -- worth remembering if this
+datasource's config is ever touched again.
+
+**Same zombie-PID-1 issue already fixed for bronze-consumer, hit live
+here too** -- first time this session Grafana's own container needed a
+real restart (not just a fresh `up`): `docker compose restart grafana`
+failed outright, `"container ... is zombie and can not be killed. Use
+the --init option"`. Same fix, same reasoning, applied to `grafana`'s
+own service block: `init: true`, low-risk and additive.
+
+**Validated live end to end, not just "loaded without a provisioning
+error":**
+- `GET /api/search?type=dash-db` confirms the dashboard is
+  provisioned, correct `uid`/`title`/`tags`.
+- `POST /api/ds/query` against the real datasource uid, run through
+  Grafana itself (not Prometheus directly) -- confirmed real data for
+  an Airflow panel (`airflow_task_finish_total`, a real
+  `task_id="entities_parameter"`/`state="success"` series) and a
+  Bronze Consumer panel (`mdp_bronze_consumer_lag` over a 24h range,
+  15 real entity series with real historical values).
+
+## Sprint 13 close-out, part 3 (final): 4 Grafana alert rules against real metrics, notification delivery deliberately out of scope
+
+Same session, immediately after the dashboard above -- every alert
+rule here reuses a query already validated building that dashboard,
+not a new, unverified one. Provisioned as code
+(`infrastructure/docker/monitoring/grafana/provisioning/alerting/`,
+3 files: `rules.yml`, `contactpoints.yml`, `policies.yml`).
+
+**4 rules, one per real signal already on the Pipeline Health
+dashboard:**
+1. `mdp-pipeline-stale` -- `time() - mdp_pipeline_last_run_timestamp_seconds{job="extract_postgres"} > 5400`
+   (90 min, 3x `marketplace_batch_pipeline`'s own 30-min schedule),
+   `for: 5m`.
+2. `mdp-airflow-scheduler-stalled` -- `rate(airflow_scheduler_heartbeat_total[5m]) < 0.01`
+   (not an exact `== 0`, avoids float-precision noise on a real,
+   always-incrementing counter), `for: 5m`.
+3. `mdp-bronze-write-failures` -- `sum(increase(mdp_bronze_write_failures_total[15m])) > 0`,
+   `for: 0m` (fires as soon as observed).
+4. `mdp-airflow-task-failures` -- `sum(increase(airflow_task_finish_total{state="failed"}[15m])) > 0`,
+   `for: 0m`.
+
+Each uses Grafana's two-stage query model: refId `A` is the real
+Prometheus instant query (datasource uid `PBFA97CFB590B2093`, same one
+the dashboard uses -- see the entry above for why it's hardcoded, not
+provisioning-assigned), refId `B` is a `threshold` expression
+(datasource uid `-100`, Grafana's reserved pseudo-datasource for
+expressions) evaluating `A` against the real condition.
+
+**Deliberate scope decision, not an oversight:** this dev environment
+has no real notification channel configured anywhere --
+`docker-compose.yml`/`.env` have no `SMTP_*`, no Slack webhook URL, no
+PagerDuty key, nothing. Every alert rule still needs a route to *some*
+contact point (Grafana's alerting engine enforces this structurally),
+so `contactpoints.yml` defines `mdp-webhook-placeholder`, a `webhook`
+receiver pointed at `http://localhost:1/...` -- a port nothing in this
+stack (or on the host) ever binds, chosen deliberately so a delivery
+attempt fails immediately and unambiguously rather than hanging on a
+slow timeout against a URL that merely doesn't resolve. This makes
+alert **rule evaluation** (does the condition correctly detect a real
+problem against real data) fully real and validatable without also
+having to stand up or fake a real SMTP/Slack integration this
+environment doesn't have. Notification **delivery** is an explicit,
+tracked gap -- revisit when a real channel (Slack webhook is the
+lowest-friction option, same reasoning ADR-012 gave Telegram over
+WhatsApp for a different channel decision) is actually wanted.
+
+**Validated live via the Grafana alerting API, not just "provisioned
+without error":** `GET /api/v1/provisioning/alert-rules` confirms all
+4 rules exist with the exact structure written above; `GET
+/api/prometheus/grafana/api/v1/rules` (the real, live evaluation
+endpoint) shows all 4 with `health: ok`, empty `lastError`, and state
+`inactive` -- correctly matching real current conditions at validation
+time (the pipeline had completed a run ~10 minutes earlier, the
+scheduler's heartbeat was actively incrementing, and neither Bronze
+write failures nor Airflow task failures had occurred in the trailing
+15-minute window each rule checks -- confirmed against the same real
+Prometheus data the rules themselves query, not asserted from the API
+response alone).
+
+**Sprint 13 (Observability) is now closed**: logging, metrics,
+dashboards and alerting (rule evaluation) are all real, validated
+end-to-end against live data -- the one explicitly deferred piece is
+alert notification *delivery*, tracked above as its own follow-up, not
+silently folded into "done".
