@@ -558,7 +558,11 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 
 - ✅ Repository Structure
 - ✅ Docker Environment (Postgres, Kafka, Debezium, Airflow, Redis)
-- ✅ Terraform Foundation (`dev` environment applied: S3, Glue databases, Athena workgroup, Unity Catalog IAM trust)
+- ✅ Terraform Foundation (`dev` environment applied: S3, Glue databases, Athena workgroup, Unity Catalog IAM trust). **`terraform init` alone is no longer enough** as of this session: `backend.tf` (in both `infrastructure/terraform/bootstrap/` and `infrastructure/terraform/environments/dev/`) is now an empty `backend "s3" {}` block -- Terraform's own backend blocks can't reference `var.*` (a hard restriction, not a choice), so the real bucket/key/region moved to a sibling `backend-dev.hcl` file, passed explicitly:
+  ```bash
+  terraform init -backend-config=backend-dev.hcl
+  ```
+  Deliberate, not a regression -- see `docs/architecture/roadmap-next-steps.md` for why, and for the real `terraform state list`/`plan` validation that this reconfiguration didn't touch any existing state (same bucket/key/region as the hardcoded values it replaced, recognized as the same backend, no migration).
 
 ## Phase 2 — CDC
 

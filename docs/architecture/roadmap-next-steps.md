@@ -1946,3 +1946,59 @@ Separately, a real, concurrently-running `extract_postgres` task
 (`mdp-airflow-ingest-dev`, a completely independent process) shipped
 its own real events to the same log group in the same window --
 confirming the reduced grant works for both identities, not just one.
+
+## The 2 backend-config `"mdp-"` literals -- resolved via partial backend configuration, not `module.naming`
+
+Closes the last piece of the naming-portability entry above. Terraform
+`backend {}` blocks can't reference `var.*`/`local.*` at all -- a hard
+language restriction (backend configuration is resolved before any
+variables are), not a choice, so `module.naming` (the fix for every
+other hardcoded name) was never applicable here. The idiomatic
+Terraform answer to exactly this restriction is **partial backend
+configuration**: the `backend "s3" { ... }` block in both
+`bootstrap/backend.tf` and `environments/dev/backend.tf` is now empty
+(`backend "s3" {}`), and the real `bucket`/`key`/`region` values live
+in a sibling `backend-dev.hcl` file each, passed explicitly:
+
+```bash
+terraform init -backend-config=backend-dev.hcl
+```
+
+instead of a bare `terraform init`. Both `.hcl` files are tracked in
+git, not gitignored -- the bucket name (which embeds the AWS account
+id) was already public in this repo's history via the hardcoded
+`backend.tf` files they replace, so relocating the same value changes
+nothing about that, and gitignoring it would break `git clone` + the
+documented init flow for anyone.
+
+**Validated live, real risk taken seriously (backend reconfiguration
+is the one Terraform operation that can genuinely orphan a real
+state file if mishandled) -- baseline captured before touching
+anything, every step run with `-input=false` so any ambiguity would
+surface as a hard error instead of a hidden interactive prompt:**
+
+1. `bootstrap/` had never been initialized in this local checkout at
+   all (`.terraform/` didn't exist) -- ran a plain `terraform init`
+   first, against the still-hardcoded backend, to get a real
+   `terraform state list` baseline (4 resources: the state bucket
+   itself + its versioning/encryption/public-access-block) before
+   changing anything.
+2. Same baseline for `environments/dev/` (62 resources, already
+   initialized from earlier this session).
+3. Applied the empty-block + `backend-dev.hcl` split to both, then ran
+   `terraform init -backend-config=backend-dev.hcl -reconfigure
+   -input=false` in each -- both times: `"Successfully configured the
+   backend \"s3\"!"`, no migration language, no "copy existing state
+   to the new backend?" prompt, no error. Exactly the outcome expected
+   from an identical bucket/key/region moved from inline to a file,
+   not a real backend change.
+4. `terraform state list` after, diffed byte-for-byte against each
+   baseline: **identical**, 4/4 and 62/62.
+5. A real `terraform plan` in each: `bootstrap/` showed one unrelated,
+   pre-existing tag drift (`Project = "modern-data-platform"` vs. the
+   module's own `"mdp"` -- real, but orthogonal to this change, not
+   touched); `environments/dev/` showed **"No changes. Your
+   infrastructure matches the configuration."** -- the real
+   62-resource state, confirmed intact.
+
+No state was migrated, no resource was touched, nothing was orphaned.
