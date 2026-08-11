@@ -2328,3 +2328,28 @@ not a blanket policy change.
 `"No changes"` against the real 62-resource state. Same in `bootstrap/`
 -- only the same pre-existing, unrelated tag drift already documented
 elsewhere in this file, nothing new.
+
+## Sprint 14, item 3: `infrastructure/terraform/README.md` filled in
+
+Was tracked but empty. Now documents: the 2-root-module layout
+(`bootstrap/` vs `environments/dev/`) and why `bootstrap/` is
+separate, the module library (7 modules, one line each), the naming
+convention (`module.naming_*`, from item 1's portability pass), the
+new `-backend-config` init flow and `use_lockfile` state locking (both
+from this same Sprint 14 pass), the committed `terraform.tfvars` (item
+2), and the established secrets pattern (sensitive Terraform outputs
+read once into `infrastructure/docker/.env`, never a `.tfvars` value).
+
+**Validated live, not just written and trusted**: ran the README's own
+"Getting started" commands verbatim (`terraform init
+-backend-config=backend-dev.hcl`, then `terraform plan` with zero
+`-var` flags) in `environments/dev/` -- clean init, `"No changes"`
+against the real 62-resource state, exactly as documented.
+
+**Sprint 14 (Infrastructure as Code) is closed for this pass**: state
+locking, committed tfvars, and real module/environment documentation
+were the 3 gaps found when surveying what the sprint's own name
+implied against what already existed (Terraform Foundation, the
+7-module library, and today's earlier portability + partial-backend
+work were already done coming into this survey). No further Sprint 14
+work identified as missing in this pass.
