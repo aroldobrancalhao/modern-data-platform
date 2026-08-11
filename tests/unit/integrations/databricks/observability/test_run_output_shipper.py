@@ -2,17 +2,24 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from databricks.sdk.service.jobs import RunResultState
 
 from integrations.databricks.observability.run_output_shipper import (
     ship_run_output_to_cloudwatch,
 )
 
 
-def _task(task_key: str, run_id: int) -> SimpleNamespace:
+def _task(
+    task_key: str,
+    run_id: int,
+    result_state: RunResultState = RunResultState.SUCCESS,
+) -> SimpleNamespace:
     return SimpleNamespace(
         task_key=task_key,
         run_id=run_id,
-        state=SimpleNamespace(life_cycle_state="TERMINATED", result_state="SUCCESS"),
+        state=SimpleNamespace(
+            life_cycle_state="TERMINATED", result_state=result_state
+        ),
     )
 
 
@@ -146,7 +153,9 @@ def test_message_includes_notebook_result_and_task_identity(
 
 def test_error_and_error_trace_included_on_failure(fake_handler: MagicMock) -> None:
     workspace = MagicMock()
-    workspace.jobs.get_run.return_value = SimpleNamespace(tasks=[_task("bronze", 1)])
+    workspace.jobs.get_run.return_value = SimpleNamespace(
+        tasks=[_task("bronze", 1, result_state=RunResultState.FAILED)]
+    )
     workspace.jobs.get_run_output.return_value = _output(
         error="NameError: x is not defined",
         error_trace="Traceback ...",
@@ -167,3 +176,40 @@ def test_error_and_error_trace_included_on_failure(fake_handler: MagicMock) -> N
 
     assert "error=NameError: x is not defined" in logged_lines[0]
     assert "error_trace=Traceback ..." in logged_lines[0]
+
+
+def test_error_suppressed_when_the_task_actually_succeeded(
+    fake_handler: MagicMock,
+) -> None:
+    """
+    The real, live-caught API quirk this guards against: RunOutput.error
+    is populated with a generic placeholder ("Please refer to the logs
+    for this run on the triggered run details page.") even when
+    result_state is SUCCESS -- confirmed against the real databricks-sdk
+    docstring (RunOutput.error: "indicating why a task failed OR why
+    output is not available"). A successful task must not read as
+    failed just because this field happens to be non-empty.
+    """
+    workspace = MagicMock()
+    workspace.jobs.get_run.return_value = SimpleNamespace(
+        tasks=[_task("bronze", 1, result_state=RunResultState.SUCCESS)]
+    )
+    workspace.jobs.get_run_output.return_value = _output(
+        error="Please refer to the logs for this run on the triggered run details page.",
+    )
+
+    logged_lines: list[str] = []
+
+    with patch(
+        "integrations.databricks.observability.run_output_shipper.logging.getLogger"
+    ) as get_logger:
+        logger = MagicMock()
+        logger.info.side_effect = logged_lines.append
+        get_logger.return_value = logger
+
+        ship_run_output_to_cloudwatch(
+            workspace=workspace, run_id=1, log_group_name="/mdp/dev/databricks"
+        )
+
+    assert "error=" not in logged_lines[0]
+    assert "result_state=RunResultState.SUCCESS" in logged_lines[0]

@@ -1632,9 +1632,27 @@ confirmed via `aws logs get-log-events`. A genuine, harmless API quirk
 found along the way: `RunOutput.error` is populated with a generic
 placeholder string ("Please refer to the logs for this run on the
 triggered run details page.") even on success, not only on failure --
-`_format_task_output()` includes it whenever present, which reads as
-if every task had an error; cosmetic, not fixed here, easy to filter
-on `result_state` if it becomes confusing in practice.
+`_format_task_output()` included it whenever present, which read as
+if every task had an error.
+
+**Update, 2026-08-11 -- fixed, root cause confirmed against the
+official source first, not assumed**: `databricks-sdk`'s own
+`RunOutput.error` docstring settles it -- "An error message indicating
+why a task failed **or why output is not available**." A notebook
+task that completes successfully without calling
+`dbutils.notebook.exit()` (every notebook in this project's 4 real
+Jobs) has "no output available" in the API's own strict sense, and
+`error` gets populated with the placeholder even though nothing
+failed -- real, documented API behavior, not a bug to work around
+structurally. `_format_task_output()` now gates `error`/`error_trace`
+on the task's real `state.result_state`
+(`== RunResultState.SUCCESS`), not the field's mere presence. New
+test (`test_error_suppressed_when_the_task_actually_succeeded`)
+reproduces the exact real placeholder string with a real `SUCCESS`
+result_state and confirms it's excluded; the existing failure test
+now uses a real `RunResultState.FAILED` fixture instead of a bare
+string that never actually matched the enum comparison. Full suite:
+512 passed (511 + 1 new), `ruff`/`mypy` clean.
 
 **Two real, live-caught bugs found validating the above, both fixed
 before the final passing run:**
