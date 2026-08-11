@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 
 from data_platform.processing.core.execution_status import ExecutionStatus
-from data_platform.processing.core.pipeline import Pipeline, StageGroup
+from data_platform.processing.core.pipeline import Pipeline
 from data_platform.processing.core.processing_context import ProcessingContext
 from data_platform.processing.core.stage import Stage
 from data_platform.processing.core.stage_result import StageResult

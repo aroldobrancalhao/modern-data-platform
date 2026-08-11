@@ -327,7 +327,7 @@ needs updates from multiple sources reconciled. Not needed today --
 splitting the write paths removed the actual conflict at its root, for
 every entity, not just `products`.
 
-## Airflow's AWS credentials -- partially scoped this session, dbt still on the personal key
+## Airflow's AWS credentials -- fully scoped, no identity left on the personal key (dbt_gold closed 2026-08-11)
 
 **Update, 2026-08-10, later the same session**: `bronze-consumer`'s own
 credential swap (mentioned as separate, uninvestigated remaining work
@@ -958,7 +958,7 @@ implemented now:**
    entry above), just extra storage/scan cost sitting in these 8
    tables until they're rebuilt or cleaned up.
 
-## Kafka broker was OOM-killed today, triggering the 2026-08-10 resume's disruption -- found, not fixed
+## Kafka broker was OOM-killed today, triggering the 2026-08-10 resume's disruption -- found, fixed 2026-08-11
 
 Found while diagnosing why a plain `docker restart mdp-bronze-consumer`
 (the resume session's first, reflexive remediation attempt) didn't
