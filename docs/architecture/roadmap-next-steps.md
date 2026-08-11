@@ -1489,38 +1489,34 @@ tradeoff -- and the dedup path meant to resolve all of it at the
 Silver layer is confirmed working against real data, not just
 synthetic fixtures.
 
-## `Pipeline.__iter__`'s declared return type doesn't match what it actually yields -- found during this session's repo-wide mypy sweep, not fixed
+## `Pipeline.__iter__`'s declared return type doesn't match what it actually yields -- fixed
 
-`uv run mypy src/data_platform/processing/core/pipeline.py`:
+**Update, 2026-08-11**: fixed, option (b) from the 3 originally
+recorded. `Pipeline._flatten()` (kept as-is, still `Iterator[Stage |
+None]`, still the only thing `__post_init__` calls -- it needs the raw
+`None` to raise its own descriptive `ValueError`) gained a sibling,
+`_flatten_validated() -> Iterator[Stage]`, which every other caller
+(`__iter__`, `__len__`) now uses instead. Not just a type-checker
+appeasement: `Pipeline` isn't `frozen=True`, so `.stages` can be
+reassigned after construction, bypassing `__post_init__`'s one-time
+validation entirely -- `_flatten_validated()`'s `assert stage is not
+None` is a real, tested guarantee (`test_iterating_after_stages_is_
+reassigned_to_contain_none_raises_assertion_error`, confirms a real
+`AssertionError`, not a silent `None` propagating downstream), chosen
+over (a) a bare `# type: ignore` (would have trusted the invariant
+forever with no runtime check) and (c) duplicating the traversal logic
+across two independently-written methods.
 
-```
-pipeline.py:97: error: Incompatible return value type
-  (got "Iterator[Stage | None]", expected "Iterator[Stage]")  [return-value]
-```
+Validated live: `mypy src/` error count 2 -> 1 (only the separate,
+unrelated `policy_context.py` finding remains, out of scope here); 511
+tests passing (510 + 1 new), `ruff` clean.
 
-`Pipeline.__iter__` is declared `-> Iterator[Stage]` but returns
-`self._flatten()`, whose real signature is `-> Iterator[Stage | None]`
--- `_flatten()` can yield `None` (see its own docstring: "only
-`__post_init__`'s own validation loop ever sees that case"). In
-practice this is safe: `__post_init__` walks `_flatten()` once at
-construction time specifically to reject any `None` with a
-`ValueError` before the `Pipeline` object is ever handed back to a
-caller, so no `Pipeline` that survived construction can yield `None`
-on a later `__iter__()` call -- but that guarantee lives in
-`__post_init__`'s logic, not in `_flatten()`'s type signature, so
-mypy has no way to verify it and correctly flags the mismatch.
-
-**Not fixed**: found live during this session's repo-wide `ruff`/mypy
-sweep, alongside unrelated fixes; deliberately not touched then to
-keep that sweep's own commit scoped to what it was already doing.
-Options, not decided: (a) `# type: ignore[return-value]` on
-`__iter__` with a comment pointing at `__post_init__`'s invariant, (b)
-a private `_flatten_validated() -> Iterator[Stage]` that asserts
-non-`None` per item (turns a real-but-currently-impossible case into
-an explicit `AssertionError` instead of a silent type lie), or (c)
-give `_flatten()` two callers with different signatures instead of
-sharing one. No real behavior is wrong today -- this is a type-safety
-gap, not a runtime bug.
+Original finding, kept for context: `uv run mypy
+src/data_platform/processing/core/pipeline.py` flagged
+`pipeline.py:97: error: Incompatible return value type (got
+"Iterator[Stage | None]", expected "Iterator[Stage]")` -- `__iter__`
+was declared `-> Iterator[Stage]` but returned `self._flatten()`
+directly, whose real signature includes `None`.
 
 ## Sprint 13 (Observability) close-out, part 1: the 5 unwired CloudWatch log groups -- resolved per log group, not uniformly
 

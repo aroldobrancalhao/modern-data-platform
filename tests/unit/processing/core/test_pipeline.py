@@ -256,6 +256,33 @@ def test_pipeline_rejects_none_stage_inside_a_group() -> None:
         )
 
 
+def test_iterating_after_stages_is_reassigned_to_contain_none_raises_assertion_error() -> (
+    None
+):
+    """
+    Pipeline isn't frozen -- __post_init__ only validates once, at
+    construction time, so reassigning `.stages` afterward bypasses it
+    entirely. _flatten_validated() (the real Iterator[Stage] __iter__/
+    __len__ use, see its own docstring) asserts every yielded item is
+    a real Stage instead of silently propagating a None downstream --
+    this is what makes that a real, tested guarantee, not just a
+    comment.
+    """
+    pipeline = Pipeline(
+        id="pipeline",
+        name="Pipeline",
+        stages=(create_stage("extract"),),
+    )
+
+    pipeline.stages = (None,)  # type: ignore[assignment]
+
+    with pytest.raises(AssertionError, match="Pipeline cannot contain null stages."):
+        list(pipeline)
+
+    with pytest.raises(AssertionError, match="Pipeline cannot contain null stages."):
+        len(pipeline)
+
+
 def test_pipeline_rejects_duplicate_stage_ids_across_a_group_and_a_lone_stage() -> (
     None
 ):

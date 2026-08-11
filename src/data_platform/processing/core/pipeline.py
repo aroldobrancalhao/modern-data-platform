@@ -93,11 +93,30 @@ class Pipeline(Entity[str]):
             else:
                 yield from item
 
+    def _flatten_validated(self) -> Iterator[Stage]:
+        """
+        Same traversal as ``_flatten()``, but a real ``Iterator[Stage]``
+        -- every callsite other than ``__post_init__`` (which needs the
+        raw ``None`` to raise its own descriptive ``ValueError``) uses
+        this instead.
+
+        The assertion below isn't just satisfying mypy: ``Pipeline``
+        isn't ``frozen``, so ``stages`` could in principle be
+        reassigned to include a ``None`` after construction, bypassing
+        ``__post_init__``'s one-time validation entirely. An
+        ``AssertionError`` here is a far clearer failure than silently
+        handing a ``None`` downstream to whatever executor code calls
+        this next.
+        """
+        for stage in self._flatten():
+            assert stage is not None, "Pipeline cannot contain null stages."
+            yield stage
+
     def __iter__(self) -> Iterator[Stage]:
-        return self._flatten()
+        return self._flatten_validated()
 
     def __len__(self) -> int:
-        return sum(1 for _ in self._flatten())
+        return sum(1 for _ in self._flatten_validated())
 
     @property
     def is_empty(self) -> bool:
