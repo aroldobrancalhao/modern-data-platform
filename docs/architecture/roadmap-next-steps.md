@@ -2638,3 +2638,100 @@ session with careful measurement (how large a margin actually drives
 the failure rate to ~0 under real contention, not a guessed number
 tacked on at the end of a long day) rather than a same-day patch on
 top of an already-long change.
+
+## `bronze/` streaming cleanup -- OPTIMIZE run for real (16 entities), VACUUM validated end to end, physical space reclaim deferred to 2026-08-18 by design
+
+Follow-up to the `_MAX_BATCH_AGE_SECONDS` fix above, addressing what
+already existed rather than just stopping future growth: `bronze/`'s
+64,549 real objects (under 1 GB) predated that fix and needed their
+own real compaction pass, not just a smaller rate of new small files
+going forward.
+
+**Pre-checks re-confirmed live immediately before running, not reused
+from the Part 1 checks a few hours earlier** (real state had changed
+meaningfully since -- a container rebuild, a 1,000-cycle simulator
+burst): Athena `list-query-executions` still empty, Glue crawler
+(`mdp-bronze-crawler-dev`) still `READY`/`Schedule: None`/`LastCrawl:
+None`, zero tables registered in `mdp_bronze_dev`, zero local Spark
+processes, `mdp-bronze-consumer` still the only process touching
+`bronze/` and still append-only (safe to run concurrently with
+`OPTIMIZE` per Delta's own documented concurrent-writer support).
+
+**OPTIMIZE (`DeltaTable.optimize.compact()`), run for real against all
+16 streaming entities**: compacted every entity from thousands of
+active data files down to 1 each -- **32,240 files logically
+superseded in total** (per-entity range: `payment_methods` at 0 --
+already a single file, only 1 real commit ever -- up to `products` at
+3,621). This takes effect immediately for any *new* read (a future
+Glue crawler run, an Athena query, a Spark job) -- fewer files to open
+and list, independent of when the old physical files actually get
+removed below.
+
+**VACUUM dry-run, all 16 entities, full list captured before asking
+for approval**: **0 files eligible for deletion, in every single
+entity** -- not a bug, this is Delta's own retention safety working
+exactly as intended. `enforce_retention_duration=True` (kept, per the
+earlier plan's explicit "don't shorten just to clean up faster"
+decision) only lets VACUUM physically delete a tombstoned file once
+it's older than `retention_hours` (168h = 7 days, also kept at Delta's
+own default). Every one of the 32,240 files OPTIMIZE just superseded
+was tombstoned *seconds* before the VACUUM dry-run ran against it --
+nowhere close to 7 days old yet.
+
+**Confirmed via a real `dry_run=False` run afterward (approved
+separately, per the "even with the general plan approved, this step
+needs its own explicit go-ahead" instruction)**: also 0 files deleted,
+identical to the dry-run -- the mechanism is validated end to end
+against real state, it's just correctly a no-op today.
+
+**What this means concretely, so this doesn't need to be
+re-investigated from memory later:**
+1. OPTIMIZE's benefit (fewer files for any new read to open) is real
+   and already in effect today.
+2. The physical space reclaim -- actually deleting the ~64,500 old
+   small objects still sitting in S3 -- will **not** happen until
+   `retention_hours=168` has genuinely elapsed from the tombstone
+   time above, i.e. **not before 2026-08-18** (7 days from today,
+   2026-08-11).
+3. **To actually reclaim the space after that date**, re-run VACUUM
+   (OPTIMIZE does not need to run again -- it already compacted
+   everything; re-running it on an already-optimized table is a
+   correctly-observed no-op, confirmed live above: the `--apply` run's
+   own OPTIMIZE step showed `0 added, 0 removed` everywhere).
+   Exact reusable command (the same script this entry describes,
+   `deltalake`'s own API, no Spark needed -- matches how
+   `bronze_consumer.py` itself already writes to this table):
+   ```python
+   from deltalake import DeltaTable
+   from data_platform.storage.config import StorageConfig
+   from streaming.consumers.bronze_consumer import STREAMING_ENTITIES
+
+   for entity in STREAMING_ENTITIES:
+       DeltaTable(StorageConfig.bronze(entity)).vacuum(
+           retention_hours=168,
+           dry_run=False,
+           enforce_retention_duration=True,
+       )
+   ```
+   Run with `AWS_REGION=sa-east-1 AWS_DEFAULT_REGION=sa-east-1
+   PYTHONPATH=src uv run python <script>` -- the region env vars are
+   required (the pure-Rust `deltalake` S3 client, unlike boto3, does
+   not follow a cross-region redirect; same requirement already
+   documented on `bronze_consumer.py`'s own Bronze Consumer
+   credentials).
+
+**Before/after object count and size, `bronze/` (all 16 streaming
+entities), measured via real `aws s3 ls --recursive --summarize`:**
+
+| Measurement | Objects | Size |
+|---|---|---|
+| Original baseline (this morning, before any fix) | 64,549 | 0.99 GB |
+| Just before this cleanup (after the `_MAX_BATCH_AGE_SECONDS` fix + the 1,000-cycle simulator validation burst) | 64,816 | 0.998 GB |
+| Right now, after OPTIMIZE + VACUUM (0 deleted) | 64,846 | 1.13 GB |
+
+The count went **up**, not down, today -- expected, not a problem:
+OPTIMIZE *added* 16 new compacted files (1 per entity) on top of every
+old file it superseded, and VACUUM hasn't removed any of those old
+files yet (see above). The real drop -- back down toward roughly 16
+files total instead of ~64,800 -- only shows up in this same
+measurement once VACUUM is re-run on or after 2026-08-18.
