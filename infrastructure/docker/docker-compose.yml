@@ -479,14 +479,22 @@ services:
     deploy:
       resources:
         limits:
-          # First container-level ceiling this service has ever had
-          # (previously unbounded, competing for host RAM with no
-          # predictability). 768M gives headroom over the 512M heap
-          # for JVM overhead (metaspace, thread stacks, off-heap
-          # buffers) and OS page cache for log segments -- not sized
-          # from a formula, will be revisited if it OOMs under real
-          # backlog load.
-          memory: 768M
+          # Raised 768M -> 1024M, 2026-08-11 -- a drafted increase from
+          # an earlier session was deliberately held back then because
+          # host-wide memory pressure looked too tight to add more
+          # (see docs/architecture/roadmap-next-steps.md, "Kafka
+          # broker was OOM-killed today" / the 2026-08-10 update to
+          # "Host RAM stays under real pressure"). Picked back up here
+          # because mdp-kafka was observed live at 710.5MiB/768M
+          # (92.52%) -- the same tight-ceiling regime that caused the
+          # original real OOM kill -- and this time a fresh
+          # measurement (not yesterday's number) showed real headroom:
+          # `free -h` available=2.6Gi, and `vmstat 2 5` showed swpd
+          # flat across 5 samples (no active growth, just an elevated
+          # cumulative total from this session's own heavy activity --
+          # rebuilds, uv syncs, terraform applies -- not live pressure
+          # pushing new pages to swap right now).
+          memory: 1024M
 
     networks:
 

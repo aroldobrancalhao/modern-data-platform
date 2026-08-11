@@ -1033,6 +1033,38 @@ what Compose reconciles live infra against" below for why, and
 for the diff itself (unapplied, `git apply` when this is actually
 decided).
 
+**Update, 2026-08-11 -- applied, decision made on a fresh measurement,
+not yesterday's number.** `mdp-kafka` observed live at
+710.5MiB/768M (92.52%) -- the same tight-ceiling regime that caused
+the original OOM. Re-checked host headroom before deciding, exactly as
+this entry's own earlier update insisted on, with today's real numbers
+instead of reusing 2026-08-10's: `free -h` -- available=2.6Gi (up from
+~2.5Gi), swap 4.2Gi/6.0Gi = 70% in use (up from 62%, the raw percentage
+alone reads worse). `vmstat 2 5` was what actually resolved the
+ambiguity: `swpd` held flat (~4.38Gi) across all 5 samples with only
+small, intermittent `si` values -- no active growth, i.e. the elevated
+swap total is residue from this session's own heavy activity
+(rebuilds, `uv sync`, `terraform apply`, full test-suite runs), not
+live pressure pushing new pages out right now. Raised to 1024M (`docker
+compose up -d kafka --dry-run` confirmed isolated scope first --
+`mdp-kafka Recreate`, nothing else). Validated live: healthy,
+`HostConfig.Memory` = 1073741824 (exactly 1024M), `cluster.id`
+unchanged (`MkU3OEVBNTcwNTJENDM2Qk`, same cluster/data), both
+`bronze-consumer` and `debezium-connect` stayed healthy through the
+recreate. The stale deferred patch
+(`docs/architecture/deferred-patches/kafka-memory-limit-768-to-1024.patch`)
+removed -- superseded by this real, applied change with its own
+comment in `docker-compose.yml`.
+
+The *aggregate* host-pressure problem this entry's own "Not fixed
+here" section named is still open -- this closes only the one-container
+ceiling, not the underlying oversubscription across ~18 containers.
+See "Host RAM stays under real pressure with the full local stack
+running" below for that -- the Compose-profile idea (stop
+non-essential services like `debezium-connect` when not actively
+testing streaming) remains the real fix for the aggregate problem, not
+attempted here.
+
 ## `docker restart mdp-bronze-consumer` failed outright: container process was a zombie -- `--init` missing from the compose service, fixed later the same session
 
 **Update, 2026-08-10, later the same session**: fixed -- `init: true`
