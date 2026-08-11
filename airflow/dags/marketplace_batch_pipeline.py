@@ -302,6 +302,64 @@ def marketplace_batch_pipeline():
         },
     )
 
+    @task
+    def ship_databricks_run_logs() -> int:
+        """
+        Sprint 13 close-out: ships the real "Full Pipeline" run's task
+        output (bronze, bronze_validate, bronze_optimize, silver) to
+        the databricks CloudWatch log group. Parallel to dbt_run_gold,
+        not upstream of it -- a shipping failure here must never block
+        the real Gold build (see
+        integrations/databricks/observability/run_output_shipper.py's
+        own docstring for what's actually shippable from these jobs --
+        serverless compute, no cluster_log_conf, so notebook output via
+        the Jobs API's get-run-output is the only reachable signal).
+
+        Builds its own WorkspaceClient from the databricks_default
+        Connection's host/token (the same PAT
+        DatabricksRunNowOperator already uses) -- deliberately not
+        DatabricksContext.workspace, which resolves
+        ~/.databrickscfg's `modern-data-platform` profile (expired,
+        wrong auth mechanism for this container regardless -- see
+        docs/environment-inventory.md).
+        """
+        from airflow.hooks.base import BaseHook
+        from airflow.sdk import get_current_context
+        from databricks.sdk import WorkspaceClient
+
+        from integrations.databricks.observability.run_output_shipper import (
+            ship_run_output_to_cloudwatch,
+        )
+
+        context = get_current_context()
+
+        run_id = context["ti"].xcom_pull(
+            task_ids="run_databricks_full_pipeline", key="run_id"
+        )
+
+        if run_id is None:
+            raise RuntimeError(
+                "run_databricks_full_pipeline did not push a run_id XCom -- "
+                "cannot ship its output to CloudWatch."
+            )
+
+        connection = BaseHook.get_connection("databricks_default")
+
+        workspace = WorkspaceClient(
+            host=connection.host,
+            token=connection.password,
+        )
+
+        shipped = ship_run_output_to_cloudwatch(
+            workspace=workspace,
+            run_id=run_id,
+            log_group_name=os.environ["DATABRICKS_CLOUDWATCH_LOG_GROUP"],
+        )
+
+        print(f"OK: shipped {shipped} Databricks task outputs to CloudWatch.")
+
+        return shipped
+
     dbt_run_gold = BashOperator(
         task_id="dbt_run_gold",
         bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --select gold",
@@ -317,6 +375,7 @@ def marketplace_batch_pipeline():
     )
 
     run_full_pipeline >> dbt_run_gold >> dbt_test_gold
+    run_full_pipeline >> ship_databricks_run_logs()
 
 
 marketplace_batch_pipeline()

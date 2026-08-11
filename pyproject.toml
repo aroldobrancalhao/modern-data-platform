@@ -25,6 +25,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
     "structlog>=26.1.0",
+    "watchtower>=3.4.0",
 ]
 
 # Orchestration/warehouse/streaming deps, split out of the core

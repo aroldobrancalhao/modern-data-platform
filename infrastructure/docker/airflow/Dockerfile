@@ -53,5 +53,6 @@ RUN pip install --no-cache-dir \
     "python-dotenv>=1.2.2" \
     "pyyaml>=6.0.3" \
     "structlog>=26.1.0" \
+    "watchtower>=3.4.0" \
     polars \
     duckdb

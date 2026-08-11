@@ -15,6 +15,16 @@ output "airflow_cloudwatch_log_group_arn" {
   value       = module.cloudwatch_airflow.arn
 }
 
+output "platform_cloudwatch_log_group_name" {
+  description = "Name (not ARN -- watchtower's CloudWatchLogHandler takes log_group_name, not an ARN) of the platform CloudWatch log group (module.cloudwatch_platform, monitoring.tf). Not sensitive. Feeds infrastructure/docker/.env's PLATFORM_CLOUDWATCH_LOG_GROUP via scripts/export-terraform-outputs.sh, same pattern as airflow_cloudwatch_log_group_arn above -- see roadmap-next-steps.md, Sprint 13 close-out."
+  value       = module.cloudwatch_platform.name
+}
+
+output "databricks_cloudwatch_log_group_name" {
+  description = "Name (not ARN) of the databricks CloudWatch log group (module.cloudwatch_databricks, monitoring.tf). Not sensitive. Feeds infrastructure/docker/.env's DATABRICKS_CLOUDWATCH_LOG_GROUP via scripts/export-terraform-outputs.sh, same pattern as platform_cloudwatch_log_group_name above -- see roadmap-next-steps.md, Sprint 13 close-out."
+  value       = module.cloudwatch_databricks.name
+}
+
 output "bronze_database" {
   value = module.glue_bronze.database_name
 }

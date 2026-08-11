@@ -93,6 +93,24 @@ x-airflow-common:
     AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
     AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
 
+    # Real, live-caught gap (Sprint 13 close-out): no AWS_REGION/
+    # AWS_DEFAULT_REGION was ever set for these containers -- worked
+    # by accident for extract_postgres because AwsContext/AwsSettings
+    # always pass an explicit region_name to boto3.Session() (default
+    # "us-east-1", itself a separate documented gap -- see
+    # docs/environment-inventory.md), so boto3 never needed to resolve
+    # a region from the environment. watchtower's own internal
+    # boto3.client("logs") construction (logging_config.py's
+    # CloudWatch handler, run_output_shipper.py) has no such override
+    # and failed with a real botocore.exceptions.NoRegionError the
+    # first time either was actually exercised inside an Airflow
+    # container -- confirmed live, not assumed, via a real
+    # ship_databricks_run_logs task failure. Same value and reasoning
+    # as bronze-consumer's own AWS_REGION/AWS_DEFAULT_REGION below in
+    # this file.
+    AWS_REGION: sa-east-1
+    AWS_DEFAULT_REGION: sa-east-1
+
     # Personal terraform-admin key -- NOT the default for this container
     # anymore, only read explicitly by dbt_run_gold/dbt_test_gold
     # (marketplace_batch_pipeline.py's BashOperator env override) since
@@ -118,6 +136,34 @@ x-airflow-common:
     AIRFLOW__LOGGING__REMOTE_LOGGING: 'True'
     AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: 'aws_default'
     AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: 'cloudwatch://${AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN}'
+
+    # Sprint 13 close-out: a second, separate CloudWatch destination
+    # from the AIRFLOW__LOGGING__REMOTE_* block above -- that one is
+    # Airflow's own task-log stream (raw stdout/stderr of the task,
+    # via CloudwatchTaskHandler). This is this project's own
+    # structlog JSON lines specifically (data_platform.observability.
+    # logging_config.configure_logging(), called by
+    # scripts/run_postgres_extraction_once.py,
+    # scripts/run_silver_catalog_registration_once.py and
+    # airflow/config/bootstrap.py -- the DAG task itself also calls
+    # configure_logging(), so its structured events land in both
+    # places: not a bug, different content/purpose per stream).
+    # mdp-airflow-ingest-dev's own IAM (AWS_ACCESS_KEY_ID/SECRET
+    # above) already covers logs:CreateLogGroup/CreateLogStream/
+    # PutLogEvents/DescribeLogStreams/GetLogEvents on this exact log
+    # group -- see infrastructure/terraform/environments/dev/security.tf.
+    LOG_CLOUDWATCH_ENABLED: 'true'
+    LOG_CLOUDWATCH_LOG_GROUP: ${PLATFORM_CLOUDWATCH_LOG_GROUP}
+
+    # Sprint 13 close-out: read directly by
+    # integrations/databricks/observability/run_output_shipper.py
+    # (called from the ship_databricks_run_logs task,
+    # marketplace_batch_pipeline.py) -- not part of the
+    # configure_logging()/LOG_CLOUDWATCH_* pair above, a separate
+    # log group with its own, more narrowly-scoped IAM grant (see
+    # infrastructure/terraform/environments/dev/security.tf,
+    # CloudWatchDatabricksLogs).
+    DATABRICKS_CLOUDWATCH_LOG_GROUP: ${DATABRICKS_CLOUDWATCH_LOG_GROUP}
 
     # Native Airflow metrics (scheduler heartbeat, DAG/task duration,
     # pool slots, ...) -- emitted via StatsD, converted into labeled
@@ -1071,6 +1117,17 @@ services:
       # already names for AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN.
       AWS_REGION: sa-east-1
       AWS_DEFAULT_REGION: sa-east-1
+      # Sprint 13 close-out: ships the same structlog JSON lines the
+      # console already prints to the platform CloudWatch log group
+      # (module.cloudwatch_platform, monitoring.tf), additive to
+      # console output, not a replacement -- see
+      # data_platform/observability/logging_config.py and
+      # roadmap-next-steps.md. mdp-bronze-consumer-dev's own IAM
+      # (MDP_BRONZE_CONSUMER_ACCESS_KEY_ID/SECRET above) already
+      # covers logs:CreateLogGroup/CreateLogStream/PutLogEvents/
+      # DescribeLogStreams/GetLogEvents on this exact log group.
+      LOG_CLOUDWATCH_ENABLED: "true"
+      LOG_CLOUDWATCH_LOG_GROUP: ${PLATFORM_CLOUDWATCH_LOG_GROUP}
     ports:
       - "9200:9200"
     depends_on:
