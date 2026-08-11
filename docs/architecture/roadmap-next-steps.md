@@ -2098,3 +2098,42 @@ button said OK":**
 
 Sprint 13's alerting entry is now closed in full -- rule evaluation
 *and* notification delivery are both real and validated end to end.
+
+## `policy_context.py:46` mypy gap -- root cause investigated, fixed
+
+Same discipline as the `Pipeline.__iter__` entry above: root cause
+investigated and reported before deciding a fix, not a drive-by
+`type: ignore`.
+
+`PolicyContext.stage_result` (`-> StageResult | None`) returns
+`execution_runtime.current_stage_result()`, whose real signature was
+`-> object | None` -- the underlying `_stage_result` `ContextVar` was
+declared `ContextVar[object | None]`, and the writer,
+`ExecutionRuntime.stage_result(self, result: object)`, accepted a bare
+`object` too.
+
+**Confirmed, not assumed, that this was unnecessary looseness, not a
+deliberate design choice**: checked whether typing it as `StageResult`
+would create a circular import (`execution_runtime.py` -> `stage_
+result.py` -> ... back to `execution_runtime.py`) -- it wouldn't;
+`stage_result.py` only imports `processing_result.py`, which only
+imports `execution_metadata`/`execution_status`/`value_object`, none
+of which touch `execution_runtime` at all. Checked the only 2 real
+call sites (`sequential_executor.py`, `parallel_executor.py`) --
+both pass the executor's own `result` straight into
+`runtime.stage_result(result)` and use `.succeeded` on it immediately
+before/after, i.e. `result` is always a real `StageResult` in
+practice, every time. `object` was just never tightened when this
+module was written, not chosen for a real reason.
+
+**Fixed**: `StageResult` imported into `execution_runtime.py`
+(confirmed safe above), `_stage_result`'s `ContextVar`,
+`current_stage_result()`'s return type, and
+`ExecutionRuntime.stage_result()`'s parameter all narrowed from
+`object` to `StageResult`. `pipeline_result()` (a different property,
+`ProcessingKeys.PIPELINE_RESULT`, not implicated in this mypy error)
+deliberately left untouched -- same "fix exactly what's broken, not
+more" discipline as everywhere else today.
+
+`mypy src/` now reports **0 errors across all 289 source files** --
+this was the last one. Full suite: 512 passed, `ruff` clean.

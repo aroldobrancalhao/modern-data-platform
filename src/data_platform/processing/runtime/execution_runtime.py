@@ -28,6 +28,7 @@ from data_platform.processing.core.execution_status import (
 from data_platform.processing.core.processing_context import (
     ProcessingContext,
 )
+from data_platform.processing.core.stage_result import StageResult
 
 # Stage-scoped execution state -- which stage/attempt is currently
 # running, its last result, its last exception, its max_attempts --
@@ -59,7 +60,7 @@ _max_attempts: ContextVar[int | None] = ContextVar(
     "max_attempts", default=None
 )
 
-_stage_result: ContextVar[object | None] = ContextVar(
+_stage_result: ContextVar[StageResult | None] = ContextVar(
     "stage_result", default=None
 )
 
@@ -83,7 +84,7 @@ def current_max_attempts() -> int:
     return _max_attempts.get() or 1
 
 
-def current_stage_result() -> object | None:
+def current_stage_result() -> StageResult | None:
     """The current stage's last recorded StageResult, if any."""
     return _stage_result.get()
 
@@ -254,7 +255,7 @@ class ExecutionRuntime:
 
     def stage_result(
         self,
-        result: object,
+        result: StageResult,
     ) -> None:
         _stage_result.set(result)
 
