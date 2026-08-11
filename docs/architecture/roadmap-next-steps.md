@@ -1217,7 +1217,7 @@ before this fix, the test failed 100% of the time (0/8+ live runs),
 every time stalling after exactly one message. See the next entry for
 what's still open.
 
-## `run_bronze_consumer` sometimes doesn't find messages that are genuinely sitting in the topic -- root cause found, 2026-08-11 (see update at the end of this entry)
+## `run_bronze_consumer` sometimes doesn't find messages that are genuinely sitting in the topic -- root cause found and CLOSED, 2026-08-11 (see update at the end of this entry)
 
 Found live while validating the fix above, in the same session -- kept
 as its own entry (not just a footnote on that fix) because it's a
@@ -1380,6 +1380,72 @@ not applied:
 - Give the topic an actual retention/cleanup policy, or reset
   (delete+recreate) it periodically -- stops the unbounded growth at
   the source rather than working around it in the test.
+
+**Update, 2026-08-11 (later the same day) -- CLOSED, candidate 2 above
+applied, found again independently while validating an unrelated
+change:** resurfaced while validating the `_MAX_BATCH_AGE_SECONDS`
+tuning above (Bronze Consumer commit-count fix) -- the required
+`real_kafka` test gate failed consistently (4/4 attempts, both with
+and without that unrelated diff applied, confirming no relationship
+between the two). Investigated fresh rather than assuming "the
+already-known issue, nothing new": real topic offsets had grown from
+123 (46+39+38, when this entry was first written) to 131 (52+41+38)
+in the time since, consistent with this entry's own prediction that
+any fixed `_MAX_POLL_ITERATIONS` eventually fails again the same way.
+
+**Candidate chosen: "consume from `latest`" (the second bullet above),
+implemented as subscribe-then-insert with an explicit tail-seed, not a
+bare `auto.offset.reset` flip:** `_seed_consumer_group_at_tail()`
+(`tests/integration/kafka/test_bronze_consumer_real_kafka.py`) joins
+the test's fresh consumer group and durably commits its position at
+every partition's real current high watermark *before* the Postgres
+insert happens, using a raw `confluent_kafka.Consumer` (bypassing
+`MessagingProvider` deliberately -- this is a test-only concern, not
+something any real caller needs). This works because Kafka only ever
+consults `auto.offset.reset` when a group has *no* committed offset
+yet -- seeding one first means "earliest" (production's own correct
+default, left unchanged in `KafkaContext`) is never consulted for this
+group at all. `run_bronze_consumer`'s own consumer, resolved later for
+the same (topic, group_id), simply resumes from the seeded position.
+Chosen over a bare offset-reset override because a committed position
+is durable and explicit about *when* "now" is (the moment right before
+the insert), where a reset policy alone only defines behavior for a
+group with no prior position -- the more precise tool for "prove this
+one new row flows through," matching what a bare policy flip cannot
+by itself guarantee ordering-wise.
+
+**Candidate 2 (topic retention/reset) deliberately NOT applied --
+evaluated and declined, not a pending gap:** checked the topic's real
+config first (`kafka-configs --describe`) -- no topic-level override
+exists, meaning it already inherits the broker's default
+(`log.retention.hours=168`, Kafka's own out-of-the-box 7-day value).
+"Grows without limit" was never literally true, just undocumented; it
+was already bounded, on a rolling 7-day window, before this update.
+More importantly, `marketplace.marketplace.carriers` is the same real
+topic the actual dev/production Bronze Consumer streaming path
+consumes from -- not a test-only fixture -- so shortening retention
+(even just making the existing 7-day default explicit) was weighed
+against zero real benefit once the tail-seed fix above made this
+test's correctness fully independent of topic size, and against a
+real, if small, risk to the live pipeline if it's ever offline longer
+than whatever window got chosen. Declined on that basis, not deferred
+for lack of time.
+
+**Validated for real, not just "logic looks right":**
+- 1 initial run + 9 more consecutive isolated runs: **10/10 passed**
+  (previously 0/4 immediately before this fix, both with and without
+  the unrelated `_MAX_BATCH_AGE_SECONDS` diff).
+- Separately, the `_MAX_BATCH_AGE_SECONDS` 30->300 change itself
+  (unrelated to this fix, validated in parallel) was run against the
+  real `mdp-bronze-consumer` container (rebuilt to pick up the source
+  change) and a real simulator burst (1,000 cycles, 13 entities) --
+  zero errors/warnings across the whole run, zero write failures,
+  trailing partial batches correctly age-flushed well within the new
+  300s window (e.g. `payments`: 7 records, `inventories`: 99) rather
+  than getting stuck, consumer lag drained from a real backlog (up to
+  799 on `inventories`) to 0 across all 14 entities with no entity
+  starving another -- no bad interaction with this same morning's
+  idle-round-skip tuning.
 
 ## `airflow/config/terraform_outputs.json` was one `export-terraform-outputs.sh` run away from leaking real AWS secret keys into git history -- fixed
 
