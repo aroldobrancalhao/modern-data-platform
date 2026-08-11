@@ -785,6 +785,83 @@ module "bronze_consumer" {
 }
 
 ##########################################################
+# Bronze Maintenance (OPTIMIZE + VACUUM) IAM User
+##########################################################
+
+# Deliberately a separate identity from bronze_consumer's, not a
+# widened version of it -- bronze_consumer.py's own policy comment
+# above explains why it has no s3:DeleteObject (it's a pure append-
+# only writer, confirmed by reading its call graph). VACUUM needs
+# DeleteObject to physically reclaim tombstoned files -- granting that
+# to the streaming consumer's own long-running credential would widen
+# what a process that never calls it can do, the opposite of this
+# project's least-privilege pattern everywhere else (airflow_ingest,
+# dbt_gold, bronze_consumer each scoped to exactly their own call
+# graph). Used by airflow/dags/bronze_streaming_maintenance.py only.
+data "aws_iam_policy_document" "bronze_maintenance" {
+
+  statement {
+
+    sid = "S3ListBronzeMaintenance"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      module.datalake.bucket_arn
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["bronze/*"]
+    }
+  }
+
+  statement {
+
+    sid = "S3ReadWriteDeleteBronze"
+
+    effect = "Allow"
+
+    actions = [
+      # GetObject: OPTIMIZE reads existing data files (and the
+      # _delta_log) to compact them. PutObject: OPTIMIZE writes the
+      # new compacted file(s) + a new _delta_log commit. DeleteObject:
+      # VACUUM physically removes tombstoned files once they're older
+      # than its retention window -- see
+      # docs/architecture/roadmap-next-steps.md for the real dry-run
+      # + apply validation this scope was confirmed against.
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject"
+    ]
+
+    resources = [
+      "${module.datalake.bucket_arn}/bronze/*"
+    ]
+  }
+}
+
+module "bronze_maintenance" {
+
+  source = "../../modules/security/iam_user"
+
+  user_name = module.naming_bronze_maintenance.resource_prefix
+
+  policy_name = module.naming_bronze_maintenance_policy.resource_prefix
+
+  description = "Scoped access for the bronze_streaming_maintenance Airflow DAG's own AWS credential: bronze/ S3 list/get/put/delete only (OPTIMIZE + VACUUM against the streaming Bronze tables). Deliberately separate from bronze_consumer's own credential -- see this policy document's own comment."
+
+  policy = data.aws_iam_policy_document.bronze_maintenance.json
+
+  tags = local.default_tags
+}
+
+##########################################################
 # dbt (Gold build) IAM User
 ##########################################################
 #

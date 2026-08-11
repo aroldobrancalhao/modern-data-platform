@@ -204,6 +204,24 @@ module "naming_bronze_consumer_policy" {
   account_id    = var.account_id
 }
 
+module "naming_bronze_maintenance" {
+  source = "../../modules/foundation/naming"
+
+  project_name  = var.project_name
+  resource_name = "bronze-maintenance"
+  environment   = var.environment
+  account_id    = var.account_id
+}
+
+module "naming_bronze_maintenance_policy" {
+  source = "../../modules/foundation/naming"
+
+  project_name  = var.project_name
+  resource_name = "bronze-maintenance-policy"
+  environment   = var.environment
+  account_id    = var.account_id
+}
+
 module "naming_dbt_gold" {
   source = "../../modules/foundation/naming"
 
