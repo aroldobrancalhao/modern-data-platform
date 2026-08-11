@@ -115,6 +115,43 @@ above -- found stale (still pointing at the old `mdp-athena-dev`/old
 staging path) exactly because this DAG was about to start running for
 real; fixed alongside it, not a separate follow-up.
 
+**Update (same day, later)**: reverted back to `schedule=None`. The
+condition this entry's own docstring quote named was narrow --
+"manual trigger only, **until a full run has been validated end to
+end**" -- and was satisfied exactly once, as a one-time proof. It was
+never a justification for an *ongoing* 30-minute automatic schedule;
+that was this session's own overreach in applying it. Re-evaluated
+against the real usage pattern (see the AWS spend entry above): this
+is a portfolio/study project with no downstream consumer needing fresh
+data on a fixed cadence -- the DAG is run manually when demonstrating
+or testing something, nothing else currently depends on it firing
+unattended. Under that use case the schedule had no benefit and a real,
+confirmed cost: `marketplace_batch_pipeline` running continuously
+every 30 minutes since 2026-08-07 (commit `22377d5`) was the
+structural driver behind the `AWSDataTransfer` spend investigated
+above. Changed `schedule=timedelta(minutes=30)` back to `schedule=None`
+in `airflow/dags/marketplace_batch_pipeline.py` (decorator argument and
+docstring both updated for consistency; the now-unused `timedelta`
+import removed). `catchup=False` left unchanged -- irrelevant under
+`schedule=None` but harmless to leave as-is if a schedule is ever
+reintroduced. Unpaused afterward (safe under `schedule=None`: no
+automatic trigger fires just from unpausing) -- this also unblocked the
+3 tasks (`dbt_run_gold`, `dbt_test_gold`, `ship_databricks_run_logs`)
+that had frozen in `scheduled` state on the in-flight
+`scheduled__2026-08-11T18:26:27` run while the DAG was paused (pausing
+blocks new DagRun creation but does not let an already-running run's
+downstream tasks progress -- confirmed via Airflow's own issue
+tracker, a correction to what this session first assumed). Validated
+for real: `airflow dags details marketplace_batch_pipeline` shows
+`next_dagrun_run_after` empty/null (no automatic next slot), a real
+`airflow dags unpause` flipped `is_paused` to `False`, the previously
+-stuck run (`scheduled__2026-08-11T18:26:27`) finished `success` once
+unblocked, and a manual `airflow dags trigger
+marketplace_batch_pipeline` created a real DagRun that progressed
+normally through `extract_postgres` (success) and into
+`run_databricks_full_pipeline` -- confirming manual triggering still
+works exactly as before.
+
 ## Power BI -- connection validated this session, dashboard not built
 
 Sprint 12 (BI) picks back up here: Metabase was already done

@@ -41,14 +41,16 @@ Each task's success is verified for real, not just "did not raise":
 - dbt_test_gold is itself the real verification for the Gold layer --
   a non-zero exit fails the task, exactly like running it manually.
 
-schedule=timedelta(minutes=30): validated end to end this session
-(real Postgres -> Databricks Full Pipeline -> dbt run/test --select
-gold, including a root-cause fix for a Bronze/Silver duplicate-row bug
-found along the way -- see docs/architecture/roadmap-next-steps.md),
-satisfying the condition this docstring itself used to name for moving
-off schedule=None. catchup=False (unchanged) means the first scheduler
-restart after this change runs only from that point forward, not once
-per missed interval since start_date.
+schedule=None: reverted back from schedule=timedelta(minutes=30) --
+the original justification ("manual trigger only, until a full run has
+been validated end to end") was satisfied and the DAG ran on a 30-minute
+schedule for real, but that schedule was itself the dominant driver of
+a real AWS AWSDataTransfer cost spike with no matching freshness need
+(this is a portfolio/study project, run manually when demonstrating or
+testing, not a production feed with real consumers). See
+docs/architecture/roadmap-next-steps.md for the full decision record
+and its "Update" appending this reversal. catchup=False (unchanged)
+still means no retroactive runs if a schedule is ever reintroduced.
 
 Author: Modern Data Platform
 License: MIT
@@ -60,7 +62,7 @@ import asyncio
 import os
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -107,7 +109,7 @@ DBT_AWS_CREDENTIALS: dict[str, str] = {
 
 @dag(
     dag_id="marketplace_batch_pipeline",
-    schedule=timedelta(minutes=30),
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["batch", "pipeline"],
