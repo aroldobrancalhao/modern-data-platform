@@ -90,67 +90,6 @@ or a periodic pass that re-evaluates existing orders against
 **Not implemented now**: recorded while investigating D4, out of scope
 for that step.
 
-## `src/` packages aren't installable -- `PYTHONPATH` required outside pytest
-
-`pyproject.toml` has no `[build-system]` table, so `uv run python -m
-simulator.app` (as documented in the README) fails with
-`ModuleNotFoundError: No module named 'simulator'` -- confirmed while
-re-running the simulator validation test. `uv run` only syncs
-dependencies, it doesn't install the project itself, so none of
-`src/`'s top-level packages (`common/data_platform/ingestion/
-integrations/quality/simulator/streaming`) land in the venv's
-site-packages. `pytest` doesn't hit this because
-`[tool.pytest.ini_options]` separately sets `pythonpath = ["src"]`,
-and `mypy`/`ruff` have their own equivalent path configs (`mypy_path`,
-`tool.ruff.src`) -- three tools each independently working around the
-same missing piece. Worked around for now (README) with `PYTHONPATH=src`
-on the run command.
-
-Found `src/modern_data_platform.egg-info/` already present on disk
-(gitignored, dated before this investigation) -- some earlier `pip
-install -e .`-style attempt was made at some point without ever adding
-`[build-system]`, so it never actually linked into a venv's
-site-packages.
-
-**Fix would be**: add `[build-system]` (hatchling) +
-`[tool.hatch.build.targets.wheel] packages = ["src/common", "src/
-data_platform", "src/integrations", "src/quality", "src/simulator",
-"src/streaming"]` (`src/ingestion` dropped from this list -- removed
-entirely, see ADR-013), so `uv sync` installs the project
-in editable mode and every `src/` package becomes importable without
-`PYTHONPATH`, everywhere (`pytest`'s explicit `pythonpath` config could
-then also be dropped).
-
-**Not done now**: touches `uv.lock` (a large, tracked, shared lockfile
-across a monorepo with heavy deps -- Airflow, PySpark, Databricks SDK)
-for a benefit that's currently just developer convenience running the
-simulator directly; also worth checking first whether the Airflow
-containers' `src:/opt/mdp/src` volume mount (see
-`docs/environment-inventory.md`) relies on the current flat-path
-behavior before changing it.
-
-**Update, 2026-08-10 -- explicitly revisited and deliberately deferred
-again, not forgotten**: come up again while other tech debt was being
-worked through during the Frente 3 reprocess wait. Still not done, for
-a sharper reason than "not urgent" this time: `bronze-consumer`'s
-image (`infrastructure/docker/streaming/Dockerfile`) `RUN uv sync
---frozen ...` against this exact `uv.lock` on every build (see
-"`docker restart` on `bronze-consumer` silently keeps running the old
-code" earlier in this file -- that container already needs a rebuild,
-not just a restart, for any `src/` change to take effect). Changing
-`uv.lock` and bundling it into the same close-out restart that's
-already carrying the `init: true` fix and the dedicated-IAM credential
-swap would stack a lockfile change on top of infra that had a real
-incident today (the zombie-container restart failure) -- separating
-them isn't about the fix being risky, it's about not compounding an
-already-eventful restart with an unrelated change. **Condition to pick
-this back up**: the `[build-system]`/`pyproject.toml` diff can be
-written and validated (`uv sync`, confirm every `src/` package imports
-without `PYTHONPATH`) at any time -- it just shouldn't actually run
-`uv lock`/land in the shared lockfile until *after* Frente 3's
-close-out restart has happened and been confirmed stable, so it lands
-as its own clean change, not folded into that one.
-
 ## `marketplace_batch_pipeline` moved off `schedule=None` -- decision record
 
 The DAG's own docstring named the condition for this explicitly:

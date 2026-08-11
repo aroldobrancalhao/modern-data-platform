@@ -403,7 +403,7 @@ The local environment includes:
 ## Apply database migrations
 
 ```bash
-PYTHONPATH=src uv run alembic upgrade head
+uv run alembic upgrade head
 ```
 
 The `marketplace` schema's initial 17 tables come from
@@ -416,19 +416,18 @@ of the app.
 ## Run the simulator
 
 ```bash
-PYTHONPATH=src PYTHONUNBUFFERED=1 uv run python -m simulator.app > /tmp/simulator.log 2>&1 &
+PYTHONUNBUFFERED=1 uv run python -m simulator.app > /tmp/simulator.log 2>&1 &
 ```
 
-`PYTHONPATH=src` is required: `pyproject.toml` has no `[build-system]`,
-so `uv run` does not install `simulator` (or any other `src/` package)
-into the venv -- without it you get `ModuleNotFoundError: No module
-named 'simulator'`. `pytest` doesn't need this because
-`[tool.pytest.ini_options]` already sets `pythonpath = ["src"]`, but
-that config only applies to pytest, not to `uv run`/plain `python`.
-See "`src/` packages aren't installable -- `PYTHONPATH` required
-outside pytest" in `docs/architecture/roadmap-next-steps.md` for the
-alternative of making the project properly installable instead of
-relying on `PYTHONPATH`.
+`pyproject.toml` now has a real `[build-system]` (hatchling,
+`[tool.hatch.build.targets.wheel]` listing every real `src/` package),
+so `uv sync` installs the project itself in editable mode and every
+`src/` package (`simulator` included) is importable without
+`PYTHONPATH` -- confirmed live: every package imports cleanly with
+`PYTHONPATH` unset, and `pytest`'s own `pythonpath = ["src"]` override
+(no longer needed either) was dropped. See "`src/` packages aren't
+installable -- `PYTHONPATH` required outside pytest" in
+`docs/architecture/roadmap-next-steps.md` for the history of this gap.
 
 An unhandled exception still kills the process (there is no top-level
 retry/supervisor loop), matching the exit code you'll see if it dies.
@@ -455,15 +454,13 @@ bronze-consumer`, after a `src/` change under it).
 For local iteration without a rebuild, run it directly instead:
 
 ```bash
-PYTHONPATH=src uv run python scripts/run_bronze_consumer.py
+uv run python scripts/run_bronze_consumer.py
 ```
 
 Long-running process: consumes Debezium change events for all 16
 streaming entities directly off Kafka and writes them to their Bronze
 Delta tables via `deltalake` (no Spark) -- the streaming half of
-ADR-0008's flow, independent from Airflow. `PYTHONPATH=src` is
-required for the same reason as the simulator, above. Stop with
-Ctrl+C.
+ADR-0008's flow, independent from Airflow. Stop with Ctrl+C.
 
 Validated end to end against real Postgres/Debezium/Kafka/Delta (see
 `tests/integration/kafka/test_bronze_consumer_real_kafka.py`, run with
