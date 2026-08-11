@@ -111,14 +111,23 @@ x-airflow-common:
     AWS_REGION: sa-east-1
     AWS_DEFAULT_REGION: sa-east-1
 
-    # Personal terraform-admin key -- NOT the default for this container
-    # anymore, only read explicitly by dbt_run_gold/dbt_test_gold
-    # (marketplace_batch_pipeline.py's BashOperator env override) since
-    # dbt needs real Athena/Glue/S3 write access to build Gold,
-    # deliberately left out of mdp-airflow-ingest-dev's narrower scope --
-    # see roadmap-next-steps.md.
+    # Personal terraform-admin key -- kept for now as a manual/ad-hoc
+    # fallback, no longer read by any DAG task by default. dbt_run_gold/
+    # dbt_test_gold moved onto mdp-dbt-gold-dev below (module.dbt_gold,
+    # Terraform, already applied) -- see roadmap-next-steps.md for the
+    # scope this dedicated identity covers (Athena mdp-athena-dbt-dev,
+    # Glue read mdp_silver_dev / write mdp_gold_dev, S3 read silver/ +
+    # read-write gold/).
     MDP_PERSONAL_ACCESS_KEY_ID: ${MDP_PERSONAL_ACCESS_KEY_ID}
     MDP_PERSONAL_SECRET_ACCESS_KEY: ${MDP_PERSONAL_SECRET_ACCESS_KEY}
+
+    # mdp-dbt-gold-dev (Terraform module.dbt_gold, environments/dev/
+    # security.tf) -- dedicated, least-privilege credential for
+    # dbt_run_gold/dbt_test_gold (marketplace_batch_pipeline.py's
+    # BashOperator env override), replacing MDP_PERSONAL_* above for
+    # that specific use.
+    MDP_DBT_GOLD_ACCESS_KEY_ID: ${MDP_DBT_GOLD_ACCESS_KEY_ID}
+    MDP_DBT_GOLD_SECRET_ACCESS_KEY: ${MDP_DBT_GOLD_SECRET_ACCESS_KEY}
 
     # Dedicated Databricks PAT (comment "airflow-orchestration"), not
     # the personal OAuth session in ~/.databrickscfg -- read into the

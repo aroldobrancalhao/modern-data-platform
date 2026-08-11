@@ -90,13 +90,18 @@ DBT_PROJECT_DIR = "/opt/mdp/dbt"
 # write gold/) to build Gold -- deliberately out of scope for
 # mdp-airflow-ingest-dev (Terraform module.airflow_ingest), which only
 # covers extract_postgres's raw/ access and CloudWatch remote logging.
-# Overriding just these two env vars (append_env=True merges rather than
-# replaces the container's environment) keeps the personal key scoped to
-# exactly the two tasks that still need it -- see
-# docs/architecture/roadmap-next-steps.md.
+# mdp-dbt-gold-dev (Terraform module.dbt_gold, environments/dev/
+# security.tf) is scoped to exactly that -- Athena mdp-athena-dbt-dev,
+# Glue read mdp_silver_dev / write mdp_gold_dev, S3 read silver/ +
+# read-write gold/, derived from what `dbt run`/`dbt test` actually do,
+# not assumed. Overriding just these two env vars (append_env=True
+# merges rather than replaces the container's environment) keeps this
+# scoped to exactly the two tasks that need it -- the personal key
+# (MDP_PERSONAL_ACCESS_KEY_ID/SECRET) is no longer read by any DAG task,
+# see docs/architecture/roadmap-next-steps.md.
 DBT_AWS_CREDENTIALS: dict[str, str] = {
-    "AWS_ACCESS_KEY_ID": os.environ["MDP_PERSONAL_ACCESS_KEY_ID"],
-    "AWS_SECRET_ACCESS_KEY": os.environ["MDP_PERSONAL_SECRET_ACCESS_KEY"],
+    "AWS_ACCESS_KEY_ID": os.environ["MDP_DBT_GOLD_ACCESS_KEY_ID"],
+    "AWS_SECRET_ACCESS_KEY": os.environ["MDP_DBT_GOLD_SECRET_ACCESS_KEY"],
 }
 
 

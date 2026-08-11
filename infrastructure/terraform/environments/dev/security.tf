@@ -1012,7 +1012,7 @@ module "dbt_gold" {
 
   policy_name = "mdp-dbt-gold-policy-dev"
 
-  description = "Scoped access for dbt's own AWS credential (dbt_run_gold/dbt_test_gold): mdp-athena-dbt-dev workgroup, Glue read on mdp_silver_dev, Glue write on mdp_gold_dev, S3 read silver/ + read-write gold/. Not yet wired into airflow/dags/marketplace_batch_pipeline.py -- those tasks still override onto MDP_PERSONAL_ACCESS_KEY_ID/SECRET, see roadmap-next-steps.md."
+  description = "Scoped access for dbt's own AWS credential (dbt_run_gold/dbt_test_gold): mdp-athena-dbt-dev workgroup, Glue read on mdp_silver_dev, Glue write on mdp_gold_dev, S3 read silver/ + read-write gold/. Wired into airflow/dags/marketplace_batch_pipeline.py's DBT_AWS_CREDENTIALS -- replaces MDP_PERSONAL_ACCESS_KEY_ID/SECRET for those two tasks, see roadmap-next-steps.md."
 
   policy = data.aws_iam_policy_document.dbt_gold.json
 

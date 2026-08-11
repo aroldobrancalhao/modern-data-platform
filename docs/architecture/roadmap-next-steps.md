@@ -419,6 +419,24 @@ everything dbt itself needs to build Gold. `bronze-consumer` needs its
 own separate investigation (S3 `bronze/` write, its own Kafka/Debezium
 CDC path) -- not covered here at all.
 
+**Update, 2026-08-11 -- dbt_gold closed, this entry fully resolved**:
+`module.dbt_gold` (Terraform, scoped exactly as this entry's own
+"Remaining work" above described -- Athena `mdp-athena-dbt-dev`, Glue
+read `mdp_silver_dev` / write `mdp_gold_dev`, S3 read `silver/` +
+read-write `gold/`) already existed, applied, but unwired -- wiring it
+was the last piece. `MDP_DBT_GOLD_ACCESS_KEY_ID`/`SECRET` written to
+`infrastructure/docker/.env` (via `terraform output -raw`, captured
+into shell variables and never printed -- Claude Code's own permission
+classifier blocked a bare `terraform output -raw ...` for exactly this
+reason, printing a real secret to the transcript). `DBT_AWS_CREDENTIALS`
+(`marketplace_batch_pipeline.py`) now points at these instead of
+`MDP_PERSONAL_ACCESS_KEY_ID`/`SECRET` -- the personal key is no longer
+read by any DAG task, kept only as a manual/ad-hoc fallback. Both
+`bronze-consumer` (see the "Update, 2026-08-10" note at the top of
+this entry) and `dbt_gold` are now on dedicated, least-privilege
+identities -- nothing in the DAG's own task graph still uses the
+personal key.
+
 ## Databricks pipeline stages were spending most of their time on `%pip install`, not data processing -- fixed
 
 Investigated why `run_databricks_full_pipeline` took ~13-14 minutes

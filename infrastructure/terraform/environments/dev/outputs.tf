@@ -82,7 +82,7 @@ output "bronze_consumer_secret_access_key" {
 }
 
 output "dbt_gold_access_key_id" {
-  description = "Access Key ID for the dbt (Gold build) IAM User (mdp-athena-dbt-dev, Glue read mdp_silver_dev / write mdp_gold_dev, S3 read silver/ + read-write gold/). Not a secret on its own, but paired here with the secret key -- treat the pair as sensitive. Not wired into airflow/dags/marketplace_batch_pipeline.py yet -- dbt_run_gold/dbt_test_gold still override onto MDP_PERSONAL_ACCESS_KEY_ID/SECRET, see roadmap-next-steps.md."
+  description = "Access Key ID for the dbt (Gold build) IAM User (mdp-athena-dbt-dev, Glue read mdp_silver_dev / write mdp_gold_dev, S3 read silver/ + read-write gold/). Not a secret on its own, but paired here with the secret key -- treat the pair as sensitive. Wired into airflow/dags/marketplace_batch_pipeline.py's DBT_AWS_CREDENTIALS -- dbt_run_gold/dbt_test_gold now override onto MDP_DBT_GOLD_ACCESS_KEY_ID/SECRET instead of the personal key, see roadmap-next-steps.md."
   value       = module.dbt_gold.access_key_id
   sensitive   = true
 }
