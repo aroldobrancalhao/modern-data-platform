@@ -1278,6 +1278,14 @@ services:
       GF_SMTP_PASSWORD: ${SMTP_PASSWORD}
       GF_SMTP_FROM_ADDRESS: ${SMTP_USER}
       GF_SMTP_FROM_NAME: "MDP Alertas"
+      # mdp-email's recipient (contactpoints.yml addresses field) --
+      # plain container env var read via provisioning's ${ALERT_EMAIL_TO}
+      # expansion, same mechanism as TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID
+      # above (not GF_*-prefixed, so distinct from the native SMTP vars
+      # right above this). Was hardcoded directly in contactpoints.yml
+      # until 2026-08-12 -- moved here so the recipient isn't tied to
+      # this specific tracked YAML file.
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana

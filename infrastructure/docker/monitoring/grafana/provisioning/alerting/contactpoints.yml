@@ -69,6 +69,12 @@
 # delivery can be confirmed via that same account's IMAP, not by
 # asking someone to check a personal inbox by hand.
 #
+# Update, 2026-08-12 (later): addresses was hardcoded here at first --
+# moved to $ALERT_EMAIL_TO (docker-compose.yml's grafana service,
+# sourced from infrastructure/docker/.env), same env-var-expansion
+# mechanism already used for Telegram's chatid/bottoken above, so the
+# recipient isn't baked into this tracked YAML file either.
+#
 # policies.yml now fans every alert out to both mdp-telegram and
 # mdp-email (nested routes, both with empty matchers -- see that
 # file's own comment for why), so this doesn't just create the
@@ -92,5 +98,5 @@ contactPoints:
       - uid: mdp-email-uid
         type: email
         settings:
-          addresses: mdp.alertas@gmail.com
+          addresses: $ALERT_EMAIL_TO
           singleEmail: true
