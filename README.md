@@ -1,5 +1,14 @@
 # Modern Data Platform
 
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat&logo=python&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white)
+![Kafka](https://img.shields.io/badge/Apache%20Kafka-231F20?style=flat&logo=apachekafka&logoColor=white)
+![Airflow](https://img.shields.io/badge/Apache%20Airflow-017CEE?style=flat&logo=apacheairflow&logoColor=white)
+![Databricks](https://img.shields.io/badge/Databricks-FF3621?style=flat&logo=databricks&logoColor=white)
+![dbt](https://img.shields.io/badge/dbt-FF694B?style=flat&logo=dbt&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=flat&logo=terraform&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)
+
 <p align="center">
 
 **A cloud-agnostic, event-driven Modern Data Platform built with open-source technologies and production-ready engineering practices.**
@@ -7,6 +16,11 @@
 Design and implementation inspired by real-world enterprise data platforms.
 
 </p>
+
+---
+
+**Aroldo Brancalhão Junior**
+[LinkedIn](https://www.linkedin.com/in/aroldo-brancalhao-junior/) · [GitHub](https://github.com/aroldobrancalhao) · [aroldobrancalhaojunior@gmail.com](mailto:aroldobrancalhaojunior@gmail.com)
 
 ---
 
@@ -26,6 +40,34 @@ The project covers the complete lifecycle of modern analytical data:
 - CI/CD
 
 Rather than focusing on a single technology, this project emphasizes software engineering principles, modular architecture, and cloud portability.
+
+---
+
+# Engineering Highlights
+
+A sample of the real bugs and incidents this project surfaced and
+resolved — the full investigation, evidence, and validation for each
+lives in `docs/architecture/roadmap-next-steps.md`, this project's
+running engineering log.
+
+- Traced 139 duplicate rows in a downstream BI table back through three system layers (the source database, the storage transaction log, and the CDC decoder) to one physical table two independent writers didn't know they shared — split it, fixed at the root instead of patched downstream. ([details](docs/architecture/roadmap-next-steps.md))
+- Found a retry bug that could loop forever reprocessing the same failed message, caught live mid-reprocessing of 16 parallel data streams, and fixed it the same day. ([details](docs/architecture/roadmap-next-steps.md))
+- Investigated a real AWS cost spike, identified the exact driver, shut it off, and added budget alerts plus automated cost-anomaly detection so it can't recur unnoticed. ([details](docs/architecture/roadmap-next-steps.md))
+- Found that a monitoring alert believed to be working had actually never fired once, traced it to a subtle metrics-counter edge case, fixed it, and proved the fix by triggering a real failure end to end. ([details](docs/architecture/roadmap-next-steps.md))
+- Found a pipeline stage burning most of its runtime reinstalling dependencies on every single run instead of processing data, and eliminated the redundant work at the source. ([details](docs/architecture/roadmap-next-steps.md))
+- Diagnosed a data pipeline silently stuck for 9 hours with zero errors logged, down to one unguarded network call, using log archaeology and direct evidence rather than guesswork. ([details](docs/architecture/roadmap-next-steps.md))
+
+<!-- TODO: screenshot -- Grafana "Pipeline Health" dashboard
+     URL: http://localhost:3000/d/mdp-pipeline-health (admin / the
+     value of GRAFANA_ADMIN_PASSWORD in infrastructure/docker/.env)
+     Should show: the full panel grid with real data visible across
+     all 3 metric sources (processing framework, Airflow, Bronze
+     Consumer) -- not an empty or "No data" state, so run the
+     simulator + bronze-consumer for a few minutes first.
+     Save as: docs/images/grafana-pipeline-health.png
+     Then replace this comment with:
+     ![Grafana Pipeline Health dashboard](docs/images/grafana-pipeline-health.png)
+-->
 
 ---
 
@@ -180,92 +222,40 @@ modern-data-platform/
 
 # Repository Modules
 
-## Platform
+`src/`'s real top-level structure, per ADR-013 (which supersedes
+ADR-001's and ADR-004's original module lists — both predated the
+codebase's actual growth and, in one case, described a package that
+no longer exists).
 
-Infrastructure-independent abstractions.
+## `data_platform/`
 
-Examples:
+Infrastructure-independent abstractions: storage, compute, messaging,
+config, monitoring, security, catalog, and the provider contracts
+(`*Provider` ABCs) everything above builds on. By far the largest
+package — see ADR-013 for its full submodule list.
 
-- Storage
-- Compute
-- Messaging
-- Monitoring
-- Catalog
-- Security
+## `integrations/`
 
----
+Per-integration client code: `kafka/`, `postgres/`, `airflow/`,
+`aws/`, `databricks/`.
 
-## Cloud
+## `quality/`
 
-Provider implementations.
+Data quality: `expectations/`, `profiling/`, `validators/`.
 
-Examples:
+## `simulator/`
 
-- AWS
-- Azure
-- Google Cloud
-- Local
+Synthetic marketplace data generator (`core/`, `domain/`) — the
+source system this whole pipeline runs against.
 
----
+## `streaming/`
 
-## Ingestion
+Kafka consumers, producers, schemas — the Bronze Consumer (real-time
+CDC ingestion) lives here.
 
-Responsible for collecting data from external systems.
+## `common/`
 
-Examples:
-
-- CDC
-- APIs
-- Batch Files
-
----
-
-## Streaming
-
-Responsible for asynchronous communication.
-
-Examples:
-
-- Kafka Producers
-- Kafka Consumers
-- Event Serialization
-
----
-
-## Processing
-
-Responsible for distributed processing.
-
-Examples:
-
-- Bronze Layer
-- Silver Layer
-
-Gold modeling is dbt's responsibility, not Spark's (see ADR-011) --
-Databricks/Spark's processing responsibility ends at Silver.
-
----
-
-## Quality
-
-Responsible for validating data quality.
-
-Future integrations include:
-
-- Great Expectations
-- Custom Validators
-
----
-
-## Orchestration
-
-Workflow management using Apache Airflow.
-
----
-
-## Analytics
-
-Analytical assets and semantic models.
+Shared constants and utilities.
 
 ---
 
@@ -365,7 +355,7 @@ Provider-specific implementations are isolated behind platform contracts.
 ## Clone the repository
 
 ```bash
-git clone https://github.com/your-user/modern-data-platform.git
+git clone https://github.com/aroldobrancalhao/modern-data-platform.git
 
 cd modern-data-platform
 ```
@@ -541,6 +531,8 @@ Current ADRs:
 - ADR-009 – Adopt Processing Framework
 - ADR-010 – Capability-Based Shared Execution Context
 - ADR-011 – Gold Modeling Moves to dbt
+- ADR-012 – Agent Layer as a Separate, Connected Project
+- ADR-013 – `src/` Module Structure, Reconciled With Reality
 
 ---
 
@@ -554,9 +546,22 @@ Two BI integrations against the same Gold layer over Athena, tool-agnostic by de
 - Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`), not `terraform-admin` -- scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated Athena staging bucket.
 - First real dashboard, **Gold Layer Overview** (`http://localhost:3001/dashboard/2`): total orders, orders by day, top products by revenue, top sellers by order count, average order value. Built via the Metabase API using Native Query (SQL), not the visual builder, so every question is versioned as plain text instead of living only in Metabase's own metadata database -- see `dashboards/metabase/` (SQL sources, data-cardinality caveats, and a from-scratch recreation procedure, since Metabase's Serialization/export feature is Pro-only).
 
-## Power BI (planned, not yet connected)
+<!-- TODO: screenshot -- Metabase "Gold Layer Overview" dashboard
+     URL: http://localhost:3001/dashboard/2 (log in with the Metabase
+     admin account created on first setup)
+     Should show: all 5 questions with real data rendered (total
+     orders, orders by day, top products by revenue, top sellers by
+     order count, average order value) -- not an empty dashboard, so
+     run the simulator and let the full pipeline land some Gold data
+     first.
+     Save as: docs/images/metabase-gold-layer-overview.png
+     Then replace this comment with:
+     ![Metabase Gold Layer Overview dashboard](docs/images/metabase-gold-layer-overview.png)
+-->
 
-Investigated but not implemented yet. Connects to the same `mdp-bi-reader-dev` IAM User and `mdp-athena-dev` workgroup as Metabase -- no new IAM identity needed when this gets built, by design (both BI tools share one read-only access boundary). Standard path: the official AWS Athena ODBC driver, a DSN, Power BI Desktop (Import mode) validated against `fact_orders`/`dim_customers`/`dim_products` before considering Power BI Service + an On-premises Data Gateway for scheduled refresh. See `docs/architecture/roadmap-next-steps.md` for the full investigation and remaining steps.
+## Power BI (connected, dashboard not built)
+
+Connects to the same `mdp-bi-reader-dev` IAM User and `mdp-athena-dev` workgroup as Metabase -- no new IAM identity needed, by design (both BI tools share one read-only access boundary). Validated via the official AWS Athena ODBC driver + a DSN, Power BI Desktop (Import mode): real rows confirmed for `fact_orders`/`dim_customers`/`dim_products`. No dashboard built yet; Power BI Service + an On-premises Data Gateway for scheduled refresh considered as the next step, not started. See `docs/architecture/roadmap-next-steps.md` for the full investigation, including two real driver/DSN bugs hit and fixed along the way (a Store-app ODBC DSN-visibility bug, a driver checksum-validation bug).
 
 ---
 
@@ -566,59 +571,36 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 
 ## Phase 1 — Foundation
 
-- ✅ Repository Structure
-- ✅ Docker Environment (Postgres, Kafka, Debezium, Airflow, Redis)
-- ✅ Terraform Foundation (`dev` environment applied: S3, Glue databases, Athena workgroup, Unity Catalog IAM trust). **`terraform init` alone is no longer enough** as of this session: `backend.tf` (in both `infrastructure/terraform/bootstrap/` and `infrastructure/terraform/environments/dev/`) is now an empty `backend "s3" {}` block -- Terraform's own backend blocks can't reference `var.*` (a hard restriction, not a choice), so the real bucket/key/region moved to a sibling `backend-dev.hcl` file, passed explicitly:
-  ```bash
-  terraform init -backend-config=backend-dev.hcl
-  ```
-  Deliberate, not a regression -- see `docs/architecture/roadmap-next-steps.md` for why, and for the real `terraform state list`/`plan` validation that this reconfiguration didn't touch any existing state (same bucket/key/region as the hardcoded values it replaced, recognized as the same backend, no migration).
+- ✅ Repository structure, Docker environment (Postgres, Kafka, Debezium, Airflow, Redis), Terraform foundation applied (`dev`: S3, Glue databases, Athena workgroup, Unity Catalog IAM trust).
 
 ## Phase 2 — CDC
 
-- ✅ PostgreSQL (populated by the simulator)
-- ✅ Debezium (connector running, capturing all `marketplace` tables)
-- ✅ Kafka (broker up, topics created on first captured change)
-- ✅ Bronze Consumer: continuous Kafka consumer streaming Debezium CDC events straight into Bronze Delta tables via `deltalake` (no Spark), independent from Airflow (see ADR-0008), validated end to end against real Postgres/Debezium/Kafka (`-m real_kafka`)
-- ✅ Real Airflow DAG (`marketplace_batch_pipeline`, Airflow 3.3.0) orchestrating the pipeline end to end -- Postgres extraction (7 entities) -> Databricks `full_pipeline` -> `dbt run`/`dbt test --select gold`, validated with a real manual trigger against real Postgres/S3/Databricks/Athena. Scheduled every 30 minutes (`schedule=timedelta(minutes=30)`, was `schedule=None` pending this exact validation) as of this session.
+- ✅ PostgreSQL, Debezium, Kafka, and a streaming Bronze Consumer (continuous Kafka consumer, no Spark, independent from Airflow) all validated end to end against real infrastructure.
+- ✅ Real Airflow DAG (`marketplace_batch_pipeline`) orchestrating Postgres extraction → Databricks → dbt, validated live. Manual-trigger only (`schedule=None`) -- a 30-minute schedule was tried and validated live, then reverted the same day after driving a real AWS cost spike with no matching freshness need.
 
 ## Phase 3 — Data Lake
 
-- ✅ Postgres extraction → `raw/` → Bronze → Silver, validated end to end against real Postgres/S3/Databricks for 7 entities (customers, orders, order_items, products, payments, sellers, categories)
-- ✅ Silver registered in the Glue Catalog (`SilverCatalogRegistrationStage`)
-- Gold is no longer a Spark/Databricks stage here -- moved to dbt (see ADR-011 and Phase 4)
-- ✅ Bronze split into two physical tables: `bronze/{entity}` (streaming, `bronze_consumer.py`, Kafka/Debezium, all 16 entities) and `bronze_batch/{entity}` (batch, `ingest_sources.ipynb`/`validate_bronze.ipynb`/`optimize_bronze.ipynb`/`transform_silver.ipynb`, the 7 dbt/Gold entities) -- `StorageConfig.bronze_batch()`. Both used to share one path, which let the streaming consumer's continuous `append`s and the batch flow's periodic `overwrite`s land inconsistent row versions in Silver for any entity that receives an update (found live: 139 duplicate `product_id` rows in `stg_products`, root-caused all the way to Postgres, Bronze's real `_delta_log` history, and the Debezium decoder before fixing). Validated live: real "Full Pipeline" run + `dbt test --select gold` **28/28 passing** (was 24/28). See `docs/architecture/roadmap-next-steps.md`.
-- ✅ Postgres extraction parallelized: `Pipeline` (`data_platform/processing/core/pipeline.py`) gained `StageGroup` -- a nested `tuple[Stage, ...]` inside `Pipeline.stages` is a group of Stages that run concurrently via `asyncio.gather`; groups still execute in sequence relative to each other. A new `ParallelExecutor(BaseExecutor)` (`data_platform/processing/executor/parallel_executor.py`) runs them; `SequentialExecutor` needed no changes at all -- flat iteration (`for stage in pipeline`) auto-flattens groups, so it still runs every stage one at a time, in order, exactly as before. `ExecutionRuntime`'s per-stage state (current stage/attempt, last result, last exception) moved from single `ProcessingContext` keys to `contextvars.ContextVar` -- each concurrent stage's own `asyncio.Task` gets an isolated copy, so two stages in the same group can no longer race on shared state the way the old single-slot design did. `StageResult` gained an `output: dict[str, Any]` field so a Stage can return its own result directly (e.g. `PostgresExtractionStage`'s landed `uri`/`bucket`/`object_key`) instead of publishing it into the shared `ProcessingContext` via a `ContextWriter`, which would collide the same way under real concurrency. `extract_postgres`'s 7 entities now run as a single parallel group (previously 7 separate sequential `Pipeline` runs) -- validated live: 45.0s → 32.2s (~1.4x), more modest than the ~2.46x theoretical estimate, since Python's GIL limits how much of the CPU-bound part (Arrow table construction, Parquet serialization) actually overlaps inside `asyncio.to_thread()` -- only the real I/O (the Postgres query, the S3 upload) genuinely does. `PostgresExtractionStage.execute()` itself needed that `asyncio.to_thread()` wrapper added: psycopg/boto3 are blocking clients, so without it the coroutine had no real `await` point for `asyncio.gather()` to interleave at, and the first live validation ran the 7 stages one at a time regardless (71s, worse than sequential) -- caught only by measuring the real run, not by the design or the unit tests (see commit `1f3002b`).
-- ✅ `bronze_streaming_maintenance` Airflow DAG: daily `OPTIMIZE` + `VACUUM` for `bronze/` (streaming, all 16 entities), superseding the one-off manual run this same investigation started with. Two sequential `@task`s (`optimize_bronze() >> vacuum_bronze(...)`), `retention_hours=168` unchanged from the manually-validated value, dedicated least-privilege IAM (`mdp-bronze-maintenance-dev`, `MDP_BRONZE_MAINTENANCE_ACCESS_KEY_ID`/`SECRET`) separate from `bronze-consumer`'s own append-only credential. Deployed and validated live: both the automatic `scheduled__...` run and a separate manual trigger finished `success`, real task logs confirmed all 16 entities logged per task. See `docs/architecture/roadmap-next-steps.md`.
+- ✅ Postgres → `raw/` → Bronze → Silver, validated end to end for all 7 core entities; Bronze split into independent streaming and batch physical tables (root-caused a real duplicate-row bug, see Engineering Highlights); daily `OPTIMIZE`/`VACUUM` automated via its own Airflow DAG.
 
 ## Phase 4 — Data Modeling
 
-- ✅ dbt project scaffolded (`dbt/`), real connection to Athena/Glue confirmed (`dbt debug`)
-- ✅ Silver sources declared for all 7 entities; `stg_*` staging models implemented and tested against real Athena data for all 7
-- ✅ `int_`/`dim_`/`fact_` Gold models: `int_order_items_enriched`, `dim_customers`, `dim_products`, `fact_orders` (star schema, table-materialized, `fact_orders` partitioned by `order_year`/`order_month`) -- `dbt run`/`dbt test` both green against real Athena
-- ✅ Gold `table`-materialized models land under a real, predictable `gold/{schema}/{table}/` S3 path (`external_location`, set explicitly per model) via a dedicated Athena workgroup for dbt builds (`mdp-athena-dbt-dev`, `enforce_output_location=false`), separate from the ad-hoc/BI workgroup (`mdp-athena-dev`, untouched). Found live: `mdp-athena-dev`'s `enforce_workgroup_configuration=true` makes dbt-athena's CTAS macro drop any location clause for Hive tables regardless of `external_location`/`s3_data_dir` config -- Gold tables were silently landing under a random `{uuid}` path instead. See `docs/architecture/roadmap-next-steps.md`.
-- ⬜ Metrics layer
+- ✅ dbt star schema (staging → intermediate → dimensions/facts) against Athena/Glue, `dbt run`/`dbt test` green.
+- ⬜ Metrics layer.
 
 ## Phase 5 — Analytics
 
-- 🔶 Dashboards -- **Sprint 12 (BI) partially complete: Metabase done (dashboard built), Power BI connected (dashboard pending).** Metabase (containerized, `infrastructure/docker/docker-compose.yml`) connected to Gold over Athena end to end. Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`) scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated staging bucket -- not `terraform-admin`. First real dashboard built via the Metabase API (Native Query/SQL, not the visual builder, so it stays versionable): **[Gold Layer Overview](dashboards/metabase/README.md)** -- total orders, orders by day, top products by revenue, top sellers by order count, average order value; SQL sources and data-cardinality caveats in `dashboards/metabase/`. Power BI Desktop connected and validated the same way (ODBC driver + DSN, `mdp-bi-reader-dev` reused, same `mdp-athena-dev` workgroup) -- real rows confirmed for `dim_customers`/`dim_products`/`fact_orders`; no dashboard built yet. See `docs/architecture/roadmap-next-steps.md` for the connection details, including two real issues hit and fixed along the way (a Store-app ODBC DSN-visibility bug, a driver checksum-validation bug).
-- ⬜ Business KPIs
+- 🔶 Metabase dashboard live and versioned as code; Power BI connected and validated, dashboard not built yet.
+- ⬜ Business KPIs.
 
 ## Phase 6 — Observability
 
-- ✅ Logging: `structlog` adopted for structured JSON logging, replacing bare `logging.getLogger` -- unified across the processing framework (`ConsoleLogger`/`ConsoleTracer`, plugged into `SequentialExecutor` via `LoggingHook`/`TracingHook`) and streaming (`data_platform.monitoring.logger.get_logger`). A single `configure_logging()` bootstrap (`data_platform/observability/logging_config.py`) is called at every real entry point (Airflow DAG task, one-off scripts, Bronze Consumer, Airflow bootstrap script), validated live against real Airflow task logs and the real Bronze Consumer. Airflow's own task logs ship to the real `/mdp/dev/airflow` CloudWatch Log Group (`CloudwatchTaskHandler`, `AIRFLOW__LOGGING__REMOTE_*` in `docker-compose.yml`, ARN kept out of code via `AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN` in `.env`), in parallel with the local files under `/opt/airflow/logs`. **Sprint 13 close-out, part 1**: of the other 5 CloudWatch log groups, `glue`/`athena` turned out to have zero possible producer in this stack (confirmed against AWS's own docs, not assumed) and were removed from Terraform as dead infrastructure; `platform` (this project's own structlog JSON, via an additive CloudWatch processor in `configure_logging()`) and `databricks` (a new Airflow task shipping the real "Full Pipeline" run's task output, event-driven, not polled) are now wired and validated live end to end (`aws logs get-log-events` against real events); `terraform` is wired via an optional wrapper script (`scripts/terraform_with_cloudwatch_logging.py`), also validated live. See `docs/architecture/roadmap-next-steps.md` for the full design decisions (including two real bugs found and fixed along the way: a stale manually-mirrored dependency list in the Airflow image, and a missing `AWS_REGION` in the Airflow containers).
-- ✅ Metrics: `MetricsHook`/`StatisticsHook` (dead code -- an in-process, home-grown registry never scraped by anything) replaced by real `prometheus_client` instrumentation across 3 sources, all scraped by a real Prometheus (`infrastructure/docker/monitoring/prometheus/prometheus.yml`, `scrape_interval: 15s`):
-  - **Processing framework**: `PrometheusHook` (`data_platform/processing/metrics/prometheus_metrics_hook.py`, same shape as `LoggingHook`/`TracingHook`) emits `mdp_pipeline_duration_seconds`, `mdp_stage_duration_seconds`, `mdp_stage_executions_total` and `mdp_pipeline_last_run_timestamp_seconds`, registered in all 3 real entry points (`extract_postgres` DAG task, `run_postgres_extraction_once.py`, `run_silver_catalog_registration_once.py`) and pushed to a real Pushgateway (`PrometheusHook.push(job=...)`) once each run finishes -- these are short-lived processes, not something Prometheus can scrape directly. Validated live: a real `extract_postgres` run (7 entities) landed real per-entity duration/status series in the Pushgateway under `job="extract_postgres"`, scraped by Prometheus with `honor_labels: true` so the pushed `job` label survives instead of being overwritten.
-  - **Airflow**: native metrics via `AIRFLOW__METRICS__STATSD_ON` -> `statsd-exporter` (mapping config: `monitoring/statsd-exporter/mapping.yml`, covering dagrun/task duration, task finish state, pool slots, scheduler heartbeat). Validated live: real `airflow_pool_*` and `airflow_scheduler_heartbeat_total` series observed at `statsd-exporter:9102/metrics`, correctly labeled (not baked into the metric name).
-  - **Bronze Consumer**: module-level metrics (`mdp_bronze_write_duration_seconds`, `mdp_bronze_records_written_total`, `mdp_bronze_write_failures_total`, `mdp_bronze_messages_consumed_total`, `mdp_bronze_consumer_lag`) exposed on `:9200/metrics`, scraped directly (it's long-running, unlike the two sources above). `mdp_bronze_consumer_lag` required extending `MessagingProvider` with `consumer_lag(topic, group_id)` (implemented in `KafkaMessagingProvider` via `assignment()`/`position()`/`get_watermark_offsets()`). Validated live against a real historical backlog (see `docs/architecture/roadmap-next-steps.md` for the throughput limitation this surfaced).
-  - Grafana provisions the Prometheus datasource automatically (`monitoring/grafana/provisioning/datasources/prometheus.yml`) -- validated live via `/api/datasources/{uid}/health` ("Successfully queried the Prometheus API"). **Sprint 13 close-out, part 2**: first real dashboard, **Pipeline Health** (`/d/mdp-pipeline-health`), provisioned as JSON (`monitoring/grafana/provisioning/dashboards/`, `allowUiUpdates: false`), same config-as-code discipline as the Metabase dashboard. 11 panels across all 3 metric sources above -- every PromQL query confirmed against real metric/label names live (Prometheus HTTP API) before being written into the dashboard, not guessed from the instrumentation code. Validated live end to end via Grafana's own `/api/ds/query` (not just Prometheus directly): real labeled data returned for both an Airflow panel and a Bronze Consumer panel.
-- ✅ Alerts: **Sprint 13 close-out, part 3**. 4 rules provisioned as code (`monitoring/grafana/provisioning/alerting/`), one per signal already on the Pipeline Health dashboard -- Airflow scheduler heartbeat stalled, Bronze Consumer write failures, Airflow task failures, and `marketplace_batch_pipeline` run failed (`mdp-pipeline-stale`). Validated live via the Grafana alerting API: all 4 show `health: ok`, no `lastError`, correct `inactive` state matching real current conditions. **Update, same session -- notification delivery closed too**: real Telegram contact point (bot `@AlertasMDP_bot`), provisioned as code with `bottoken`/`chatid` sourced from container env vars (`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `infrastructure/docker/.env`, never hardcoded in the tracked YAML). Validated with a real forced alert (not just the "Test" button) -- the actual Telegram message received and confirmed, matching the fired rule's real labels/annotations exactly. See `docs/architecture/roadmap-next-steps.md` for a real Grafana limitation found along the way (`secureSettings` env-var expansion doesn't work for this provisioner/version, `settings` does -- a deliberate, documented trade-off, not an oversight). **Update, 2026-08-12: `mdp-pipeline-stale` reformulated** from a staleness/time-since-last-run check to a real run-failure check (`airflow_task_finish_total{dag_id="marketplace_batch_pipeline", state="failed"}`) -- the DAG is manual-trigger-only now, so a staleness threshold was constant false-positive noise. **Same day: a second real channel, email** (`mdp-email`, dedicated Gmail account via SMTP), added alongside Telegram -- all 4 rules now fan out to both (`policies.yml`, nested matcherless routes), recipient sourced from `ALERT_EMAIL_TO` (`infrastructure/docker/.env`), never hardcoded. **Also that day: a real bug found and fixed in both `mdp-pipeline-stale` and `mdp-airflow-task-failures`** -- their `sum(increase(airflow_task_finish_total{...}[15m]))` queries had never actually fired, including during a real, verified task failure: `statsd_exporter` re-exposes a StatsD counter's last value forever once observed (no TTL), so a brand-new series' first sample already carries the nonzero value and `increase()`/`rate()` have no prior "0" sample to diff against -- the classic Prometheus counter cold-start blind spot. Fixed with a TTL on the specific mapping (`monitoring/statsd-exporter/mapping.yml`, `ttl: 15m`) plus a query change to a raw instant `sum(...)`, relying on the TTL (not a PromQL window) to define "recent". Validated end to end: real failure -> metric present -> both rules `Alerting` -> delivered to both Telegram and email -> both back to `Normal` once the TTL expired. See `docs/architecture/roadmap-next-steps.md` for the full investigation.
+- ✅ Structured logging (CloudWatch + local), Prometheus metrics across the processing framework/Airflow/Bronze Consumer, a Grafana dashboard, and 4 alert rules fanning out to Telegram + email -- all validated against real, induced failures, not just configured.
 
 ## Phase 7 — CI/CD
 
-- ⬜ GitHub Actions
-- ⬜ Automated Testing (tests exist and run locally; not yet wired into CI)
-- ⬜ Deployment
+- ⬜ GitHub Actions, automated testing wired into CI, deployment.
+
+Full change log, root-cause investigations, and validation evidence for every item above: `docs/architecture/roadmap-next-steps.md`.
 
 ---
 
