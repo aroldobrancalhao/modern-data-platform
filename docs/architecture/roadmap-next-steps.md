@@ -2639,6 +2639,47 @@ the failure rate to ~0 under real contention, not a guessed number
 tacked on at the end of a long day) rather than a same-day patch on
 top of an already-long change.
 
+**Update, 2026-08-12 (that later session): applied, but only after
+discovering the baseline itself couldn't be reproduced as documented
+above.** Before touching `max_iterations`, re-measured both tests'
+current failure rate under the full suite (same discipline as above:
+several runs, not one) -- and got 0/10 with no artificial load at
+all, a result inconsistent enough with the ~40%/~1-in-6-7 numbers
+above to distrust rather than accept at face value (the environment's
+own background load -- Airflow/Kafka/Grafana containers left running
+from unrelated work earlier that day -- turned out to vary a lot run
+to run, and a single manual timing check showed the suite itself
+running 5-7x faster than it had minutes earlier, meaning "no
+artificial load" wasn't a stable, comparable condition to the
+original measurement).
+
+Tried reproducing real contention directly instead of trusting
+ambient load: 10 CPU-saturating busy-loop processes (`while True`
+pure-Python spin, no sleep) alongside the suite, 10 runs -- pushed
+`loadavg` from ~5 to ~48 on this 12-core host and did trigger the
+commit-failure test once (1/10), but also broke an *unrelated* test
+(`tests/integration/airflow/test_runs.py::test_should_wait_until_run_is_finished`,
+failed 8/10) as collateral damage -- too blunt an instrument, not a
+faithful reproduction. Dialed back to 5 burners (~43% CPU, sizeable
+headroom left): 15 more runs, back to 0/15 on both target tests and
+no collateral failures elsewhere. Aggregate across all three
+conditions: commit-failure test 1/35, rejoin test 0/35 -- nowhere
+near the original ~40%/~15% baseline under any load level tried.
+
+Root cause of the discrepancy not chased further (would need
+reproducing whatever exact process mix was running during the
+original measurement, not knowable in retrospect) -- treated the
+5-burner moderate-load condition as today's real, honestly-measured
+baseline instead, and applied the mapped fix on top of it: `+200 ->
++1500` (commit-failure test), `+500 -> +3000` (rejoin test), same
+reasoning as originally mapped above (each spin iteration while a
+flush thread is still busy is one cheap dict lookup + continue, so a
+large margin costs nothing correctness-wise). Re-ran 10 more full
+suites under the identical 5-burner load after the change: **10/10
+clean on both tests, zero collateral failures.** Closed on that
+result, not on "improved" -- see this file's own standing rule for
+what counts as done here.
+
 ## `bronze/` streaming cleanup -- OPTIMIZE run for real (16 entities), VACUUM validated end to end, physical space reclaim deferred to 2026-08-18 by design
 
 Follow-up to the `_MAX_BATCH_AGE_SECONDS` fix above, addressing what

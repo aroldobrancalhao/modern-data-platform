@@ -540,10 +540,20 @@ def test_batch_commit_failure_does_not_crash_and_retries_next_cycle(
     # the retry is only submitted once the main loop observes the
     # first attempt's Future as done(), which needs real iterations
     # inside the budget, not just "+1" -- see that test's comment.
+    #
+    # Update, 2026-08-12: +200 -> +1500. Confirmed flaky at +200 under
+    # full-suite contention (docs/architecture/roadmap-next-steps.md,
+    # "_MAX_BATCH_AGE_SECONDS 30.0 -> 300.0, and 2 pre-existing flaky
+    # tests..." -- ~40% failure rate measured there). +1500 costs
+    # nothing correctness-wise (each spin iteration while the flush
+    # thread is still busy is one cheap dict lookup + continue) --
+    # it's pure headroom against how long the background
+    # ThreadPoolExecutor worker can take to get scheduled under real
+    # CPU contention, not a change to what the test actually verifies.
     run_bronze_consumer(
         provider,
         entities=("orders",),
-        max_iterations=bronze_consumer._MAX_BATCH_SIZE + 200,
+        max_iterations=bronze_consumer._MAX_BATCH_SIZE + 1500,
     )
 
     table = DeltaTable(str(tmp_path / "orders")).to_pyarrow_table()
@@ -703,10 +713,19 @@ def test_recovers_and_resumes_consuming_after_an_assignment_lost_commit_failure(
     # class of margin sensitivity already documented on
     # test_batch_write_failure_leaves_offsets_uncommitted_and_retries
     # above, just needing more headroom here for the extra flush cycle.
+    #
+    # Update, 2026-08-12: +500 -> +3000. Confirmed flaky at +500 under
+    # full-suite contention (docs/architecture/roadmap-next-steps.md,
+    # "_MAX_BATCH_AGE_SECONDS 30.0 -> 300.0, and 2 pre-existing flaky
+    # tests..." -- ~1 in 6-7 full-suite runs measured there). +3000
+    # costs nothing correctness-wise, same reasoning as the sibling
+    # commit-failure test's own +1500 bump -- pure headroom against
+    # scheduling delay under real contention, not a change to what
+    # this test verifies.
     run_bronze_consumer(
         provider,
         entities=("orders",),
-        max_iterations=batch_size + 500,
+        max_iterations=batch_size + 3000,
     )
 
     table = DeltaTable(str(tmp_path / "orders")).to_pyarrow_table()
