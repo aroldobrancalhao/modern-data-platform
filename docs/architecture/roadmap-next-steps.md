@@ -2827,3 +2827,27 @@ is -- but the entry itself stays as the real record of the first,
 manually-validated run and the reasoning that shaped this DAG's
 design (retention window, why `dry_run=False` didn't need its own
 dry-run step here, the real dates involved).
+
+## `mdp-pipeline-stale` real-failure validation attempt #1 -- failed for an unrelated infra reason, not investigated further yet
+
+While validating the reformulated `mdp-pipeline-stale` Grafana rule end
+to end (a fake `ENTITIES` entry temporarily added to
+`marketplace_batch_pipeline` to force a real `extract_postgres`
+failure), the manual trigger run (`manual__2026-08-12T13:25:45`)
+failed for the wrong reason: the task subprocess never reached the
+Postgres query. Scheduler log shows it stuck retrying
+`airflow.sdk.api.client.Client.request` calls to the api-server from
+`13:26:20` to `13:26:53`, then Celery's wrapper raised
+`ReadTimeout('timed out')` at `13:27:11` -- that's what the scheduler
+recorded as the task's `failed` state (via its "executor reported
+failed but TI state is queued" reconciliation path, not the task's own
+normal completion path). The api-server's own log shows a child
+process dying and restarting right in that window
+(`13:28:59`-`13:29:11`). Separately, between `14:02` and `14:04`, the
+api-server logged repeated `jwt.exceptions.ExpiredSignatureError`
+("JWT reissue middleware failed to refresh token"), and
+`dag-processor`/`triggerer` both restarted around the same time, with
+an orphaned task subprocess (`pid=1917`) SIGKILLed at `14:03:30` --
+36 minutes after the original timeout. Root cause of the api-server
+instability / JWT expiry itself not investigated -- flagging here so
+it isn't lost, not blocking the rule validation redo.
