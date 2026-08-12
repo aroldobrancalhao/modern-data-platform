@@ -2851,3 +2851,97 @@ an orphaned task subprocess (`pid=1917`) SIGKILLed at `14:03:30` --
 36 minutes after the original timeout. Root cause of the api-server
 instability / JWT expiry itself not investigated -- flagging here so
 it isn't lost, not blocking the rule validation redo.
+
+## `mdp-pipeline-stale` real-failure validation attempt #2 -- root cause found and fixed for real, both `increase()`-based rules affected, validated end to end
+
+Retried the same fake-entity trigger from attempt #1 above, this time
+against a stable stack (no api-server hiccups). `extract_postgres`
+failed for the right reason this time -- real log, not a timeout:
+
+```
+UndefinedTable: relation "marketplace.test_nonexistent_table_xyz" does not exist
+LINE 1: SELECT count(*) FROM marketplace.test_nonexistent_table_xyz
+```
+
+But `mdp-pipeline-stale` still didn't fire. Root cause, found before
+touching anything (per-mapping): `airflow_task_finish_total` is a
+StatsD counter, and `statsd_exporter` re-exposes a counter's last
+value on every scrape forever once observed -- no TTL was configured,
+so the series never disappears. Confirmed directly via
+`query_range` against Prometheus: 34 consecutive 15s scrapes, all
+value `"1"`, spanning ~9 minutes. `increase()` over any 15m window
+landing entirely within that flat span computes to `0` -- not because
+nothing happened, but because a brand-new series' *first* sample
+already carries the nonzero value, so `increase()`/`rate()` have no
+prior "0" sample to diff against. This is the standard Prometheus
+counter cold-start blind spot, and it's permanent for a given label
+combination as long as the exporter never expires it -- not a one-off
+flake like attempt #1's timeout.
+
+Checked the sibling rule `mdp-airflow-task-failures`
+(`sum(increase(airflow_task_finish_total{state="failed"}[15m]))`,
+same metric, no `dag_id` filter): identical pattern, identical bug,
+confirmed by code inspection alone (no need to reproduce). **This is
+the real reason neither rule had ever been validated end to end
+against a real failure, despite both existing since 2026-08-11** --
+the query itself could never fire, regardless of how many real
+failures happened.
+
+**Fix, both parts required together (TTL alone doesn't fix `increase()`,
+confirmed by the same query_range evidence above -- the metric was
+alive and flat the whole 9 minutes, TTL wouldn't have changed that
+window's `increase()` result at all):**
+
+- `infrastructure/docker/monitoring/statsd-exporter/mapping.yml`:
+  `ttl: 15m` added to the `airflow.ti.finish.*.*.*` mapping only (not
+  the global `defaults:` block -- `ti.start`, `pool.*`, `dagrun.duration.*`
+  etc. weren't in scope and don't share this specific alerting
+  pattern). Validated with `statsd_exporter --check-config` before
+  applying (both per-mapping `ttl:` and a top-level `defaults: {ttl:}`
+  parse cleanly on the running version, 0.29.0 -- per-mapping was the
+  right scope here).
+- `infrastructure/docker/monitoring/grafana/provisioning/alerting/rules.yml`:
+  both `mdp-pipeline-stale` and `mdp-airflow-task-failures` changed
+  from `sum(increase(airflow_task_finish_total{...}[15m]))` to a raw
+  instant `sum(airflow_task_finish_total{...})`. With the TTL now
+  defining "recent" (metric present = failed within the last 15m,
+  absent = TTL elapsed or never failed), the alert no longer depends
+  on `increase()` ever observing a rise -- it depends on presence,
+  which `statsd_exporter`'s TTL-driven expiry now makes correct.
+  `noDataState: OK` on both rules (already in place) is what turns
+  "metric absent" into "Normal" instead of an error state.
+- `docker compose up -d --force-recreate statsd-exporter` to load the
+  new mapping (in-memory counters reset on restart -- no real loss,
+  these are ephemeral signal counters, not historical accounting).
+
+**Operational gotcha hit mid-test, worth remembering:** editing
+`rules.yml` alone does not make Grafana pick up the new query --
+file-based alerting provisioning did not reload on its own within
+several minutes of polling. `POST /api/admin/provisioning/alerting/reload`
+(admin API, basic auth) forced it; confirmed via
+`GET /api/v1/provisioning/alert-rules/<uid>` showing the new `expr`
+and a fresh `updated` timestamp before retrying.
+
+**Validated end to end, one test run covering both rules (same
+failure matches both queries):**
+- `sum(airflow_task_finish_total{dag_id="marketplace_batch_pipeline", state="failed"})`
+  and `sum(airflow_task_finish_total{state="failed"})` both `1`
+  immediately after the failure (checked directly against Prometheus,
+  not inferred).
+- Both `mdp-pipeline-stale` and `Airflow task failures` (`mdp-airflow-task-failures`)
+  showed `state: "Alerting"` via `/api/prometheus/grafana/api/v1/rules`
+  on the very first poll after the provisioning reload.
+- Both `mdp-telegram` and `mdp-email` listed as receivers on the
+  active Alertmanager alert (`/api/alertmanager/grafana/api/v2/alerts`);
+  actual delivery to both channels confirmed by the user directly
+  (received on both).
+- **Not verified live, expected by design, to be confirmed on a later
+  check:** both rules returning to `Normal` on their own ~15m after
+  the failure, once `statsd_exporter`'s TTL expires the metric and the
+  query goes back to `NoData` -> `OK`. Didn't sit and wait for it live
+  in this session -- if a future check finds either rule still
+  `Alerting` well past 15m post-failure with no new task failures,
+  that's a real regression of this fix, not expected behavior.
+
+Fake `ENTITIES` entry reverted immediately after the test (same as
+attempt #1); `airflow dags list-import-errors` clean.

@@ -48,6 +48,32 @@
 # run counts as "the run failed". 15m window/for:0m/noDataState: OK
 # mirrors mdp-airflow-task-failures/mdp-bronze-write-failures exactly
 # (same NoData-when-idle reasoning already established there).
+#
+# Update, 2026-08-12 (later same day): sum(increase(...[15m])) ->
+# sum(...) -- the increase() form never actually fired, including
+# during a real, verified extract_postgres failure (UndefinedTable on
+# a deliberately bogus entity). Root cause: airflow_task_finish_total
+# is a StatsD counter that statsd_exporter re-exposes at a fixed
+# value forever once observed (no TTL) -- a brand-new series' first
+# sample already carries the nonzero value, so increase()/rate() have
+# no prior "0" sample to diff against and compute 0, permanently, for
+# that label combination. This is the textbook Prometheus counter
+# cold-start blind spot, not a config typo -- confirmed by direct
+# query_range against Prometheus: 34 consecutive scrapes, all value
+# "1", increase() over any window landing in that flat span == 0.
+# Fix is two parts, not one: ../../statsd-exporter/mapping.yml now
+# sets ttl: 15m on this specific mapping, so the series actually
+# disappears 15m after its last increment -- and the query here drops
+# increase() for a raw instant sum(), relying on the TTL (not a
+# PromQL window function) to define "recent". Metric present (any
+# nonzero value) => a failure happened within the last 15m => fires;
+# metric absent (never failed, or TTL elapsed) => NoData => OK, same
+# as before. This is also the real reason neither this rule nor
+# mdp-airflow-task-failures below (identical increase() pattern, same
+# underlying metric) had ever been validated end to end against a
+# real failure before today, despite both existing since yesterday --
+# see docs/architecture/roadmap-next-steps.md for the full
+# investigation and the end-to-end re-test after this fix.
 
 apiVersion: 1
 
@@ -67,7 +93,7 @@ groups:
             model:
               refId: A
               instant: true
-              expr: sum(increase(airflow_task_finish_total{dag_id="marketplace_batch_pipeline", state="failed"}[15m]))
+              expr: sum(airflow_task_finish_total{dag_id="marketplace_batch_pipeline", state="failed"})
           - refId: B
             datasourceUid: "-100"
             relativeTimeRange: { from: 900, to: 0 }
@@ -159,6 +185,11 @@ groups:
         noDataState: OK
         execErrState: Error
 
+      # Update, 2026-08-12: sum(increase(...[15m])) -> sum(...), same
+      # fix and same reason as mdp-pipeline-stale above (identical
+      # metric, identical increase()-on-a-frozen-StatsD-counter blind
+      # spot) -- see that rule's comment and
+      # docs/architecture/roadmap-next-steps.md for the investigation.
       - uid: mdp-airflow-task-failures
         title: Airflow task failures
         condition: B
@@ -169,7 +200,7 @@ groups:
             model:
               refId: A
               instant: true
-              expr: sum(increase(airflow_task_finish_total{state="failed"}[15m]))
+              expr: sum(airflow_task_finish_total{state="failed"})
           - refId: B
             datasourceUid: "-100"
             relativeTimeRange: { from: 900, to: 0 }

@@ -18,6 +18,26 @@
 #
 # Reference: Airflow docs, "Configuring StatsD", exporter mapping
 # example.
+#
+# Update, 2026-08-12: ttl added to airflow.ti.finish.*.*.* only (not
+# a global `defaults:` block -- keeps the blast radius to the one
+# mapping that actually needed it). Root cause: statsd_exporter
+# caches a counter's last value and re-exposes it on every scrape
+# forever once observed -- with no TTL, a task-finish counter that
+# fires once (e.g. one real failure) stays pinned at that value
+# indefinitely. Combined with a Prometheus increase()-based alert
+# query, this is a permanent false negative, not just cosmetic: a
+# brand-new series' very first sample already carries the nonzero
+# value (there's no prior "0" sample for increase()/rate() to diff
+# against -- the classic counter cold-start blind spot), so the
+# alert never fires on the failure it exists to catch. ttl: 15m makes
+# the series disappear from /metrics 15m after its last increment,
+# restoring real absent()/NoData semantics -- paired with the
+# corresponding query change in ../grafana/provisioning/alerting/
+# rules.yml (sum() instant read instead of sum(increase(...[15m]))).
+# See docs/architecture/roadmap-next-steps.md for the real
+# end-to-end failure that surfaced this and the validation after the
+# fix.
 
 mappings:
 
@@ -45,6 +65,7 @@ mappings:
 
   - match: "airflow.ti.finish.*.*.*"
     name: "airflow_task_finish_total"
+    ttl: 15m
     labels:
       dag_id: "$1"
       task_id: "$2"
