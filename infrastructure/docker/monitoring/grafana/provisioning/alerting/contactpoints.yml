@@ -50,6 +50,29 @@
 # a port nothing ever binds) made alert *rule evaluation* fully real
 # and validated live while being explicit that notification *delivery*
 # wasn't -- see roadmap-next-steps.md for that entry and this one.
+#
+# Update, 2026-08-12: mdp-email added as a second, real contact point
+# (the "Email as a second Grafana notification channel" entry in
+# roadmap-next-steps.md, picked up as planned). Field name (addresses)
+# confirmed against the real upstream source, not guessed:
+# github.com/grafana/alerting receivers/email/v1/config.go -- the
+# email receiver has no Secure fields of its own at all (no
+# secureSettings needed here); the actual credential (the Gmail app
+# password) lives in Grafana's server-level [smtp] config instead,
+# set via GF_SMTP_* env vars on the container (docker-compose.yml),
+# sourced from infrastructure/docker/.env (gitignored) -- same trust
+# boundary as TELEGRAM_BOT_TOKEN, different mechanism (native Grafana
+# config env var, not provisioning-file $VAR expansion), so the
+# secureSettings limitation found for Telegram doesn't apply here.
+# addresses points at mdp.alertas@gmail.com itself (the dedicated
+# account also used as the SMTP sender) -- a deliberate choice so
+# delivery can be confirmed via that same account's IMAP, not by
+# asking someone to check a personal inbox by hand.
+#
+# policies.yml now fans every alert out to both mdp-telegram and
+# mdp-email (nested routes, both with empty matchers -- see that
+# file's own comment for why), so this doesn't just create the
+# contact point, it activates it for all 4 existing rules.
 
 apiVersion: 1
 
@@ -63,3 +86,11 @@ contactPoints:
           chatid: $TELEGRAM_CHAT_ID
           parse_mode: HTML
           bottoken: $TELEGRAM_BOT_TOKEN
+  - orgId: 1
+    name: mdp-email
+    receivers:
+      - uid: mdp-email-uid
+        type: email
+        settings:
+          addresses: mdp.alertas@gmail.com
+          singleEmail: true

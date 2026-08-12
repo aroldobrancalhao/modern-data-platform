@@ -1256,6 +1256,28 @@ services:
       # sits in a tracked YAML file. Bot: @AlertasMDP_bot.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # Real SMTP server config for the mdp-email contact point
+      # (provisioning/alerting/contactpoints.yml) -- unlike the
+      # Telegram vars above, these ARE the GF_*-prefixed env vars
+      # Grafana's own [smtp] config section reads natively, so no
+      # provisioning-file $VAR expansion is involved and no
+      # secureSettings limitation applies. Dedicated Gmail account,
+      # app password, sourced from infrastructure/docker/.env
+      # (gitignored) -- see that file's own comment.
+      #
+      # GF_SMTP_FROM_ADDRESS must be a bare address -- confirmed live:
+      # "MDP Alertas <${SMTP_USER}>" crash-looped the container on
+      # startup ("invalid email address for SMTP from_address config"),
+      # a known upstream validation (grafana/grafana#13771: the
+      # from_address field rejects display-name format, unlike a
+      # normal RFC 5322 From header). from_name is Grafana's separate
+      # field for the friendly name.
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: ${SMTP_HOST}
+      GF_SMTP_USER: ${SMTP_USER}
+      GF_SMTP_PASSWORD: ${SMTP_PASSWORD}
+      GF_SMTP_FROM_ADDRESS: ${SMTP_USER}
+      GF_SMTP_FROM_NAME: "MDP Alertas"
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana

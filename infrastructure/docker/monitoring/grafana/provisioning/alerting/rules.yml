@@ -16,6 +16,38 @@
 # portable, provisioning-assigned uid). "-100" is Grafana's reserved
 # pseudo-datasource uid for expressions (threshold/reduce/math), not a
 # real datasource.
+#
+# Update, 2026-08-12: mdp-pipeline-stale reformulated from a
+# staleness/time-since-last-run check to a real run-failure check.
+# Reason: this rule's original 90-min threshold was explicitly derived
+# from marketplace_batch_pipeline's schedule=timedelta(minutes=30)
+# (see the old comment this replaced, in git history) -- but that
+# schedule was reverted back to schedule=None the same day this rule
+# was written (commit f09e907, ~5.5h after this rule's own commit
+# c0ce555), over a real AWS AWSDataTransfer cost spike, not a rollback
+# of this alerting work. The DAG is manual-trigger-only now (see its
+# own docstring), so "no run in 90 minutes" would be true almost all
+# the time -- constant false-positive noise, not a real signal, for a
+# pipeline that's only run on demand.
+#
+# uid kept as mdp-pipeline-stale (not replaced with a new uid) --
+# same reasoning as Telegram's mdp-webhook-placeholder finding: file
+# provisioning doesn't prune resources removed from the file, so
+# reusing the existing uid avoids creating an orphan that would need
+# explicit API deletion.
+#
+# New expr: airflow_task_finish_total{dag_id="marketplace_batch_pipeline",
+# state="failed"} -- a real Airflow StatsD metric (airflow.ti.finish.
+# <dag_id>.<task_id>.<state>, mapped by
+# ../../statsd-exporter/mapping.yml, already in place, no new
+# instrumentation needed), confirmed to already carry real historical
+# data for this exact dag_id before this change (2 failed
+# ship_databricks_run_logs samples, 1 failed
+# run_databricks_full_pipeline sample, in Prometheus' existing 7d
+# retention). No task_id filter -- any task failing within this DAG's
+# run counts as "the run failed". 15m window/for:0m/noDataState: OK
+# mirrors mdp-airflow-task-failures/mdp-bronze-write-failures exactly
+# (same NoData-when-idle reasoning already established there).
 
 apiVersion: 1
 
@@ -26,19 +58,19 @@ groups:
     interval: 1m
     rules:
       - uid: mdp-pipeline-stale
-        title: extract_postgres pipeline is stale
+        title: marketplace_batch_pipeline run failed
         condition: B
         data:
           - refId: A
             datasourceUid: PBFA97CFB590B2093
-            relativeTimeRange: { from: 600, to: 0 }
+            relativeTimeRange: { from: 900, to: 0 }
             model:
               refId: A
               instant: true
-              expr: time() - mdp_pipeline_last_run_timestamp_seconds{job="extract_postgres"}
+              expr: sum(increase(airflow_task_finish_total{dag_id="marketplace_batch_pipeline", state="failed"}[15m]))
           - refId: B
             datasourceUid: "-100"
-            relativeTimeRange: { from: 600, to: 0 }
+            relativeTimeRange: { from: 900, to: 0 }
             model:
               refId: B
               type: threshold
@@ -46,18 +78,18 @@ groups:
               conditions:
                 - evaluator:
                     type: gt
-                    # 5400s = 90min -- 3x marketplace_batch_pipeline's
-                    # own 30-min schedule (schedule=timedelta(minutes=30),
-                    # see that DAG's docstring), margin enough to not
-                    # false-positive on one slow run.
-                    params: [5400]
-        for: 5m
+                    params: [0]
+        for: 0m
         labels:
           severity: critical
-          source: processing-framework
+          # Changed from processing-framework -- the signal now comes
+          # from Airflow's own task-finish metric (any task in the
+          # DAG), not the processing framework's custom
+          # mdp_pipeline_last_run_timestamp_seconds gauge.
+          source: airflow
         annotations:
-          summary: "extract_postgres hasn't completed a real run in over 90 minutes."
-        noDataState: NoData
+          summary: "marketplace_batch_pipeline had a task fail in the last 15 minutes -- see the task's real log (CloudWatch /mdp/dev/airflow, or the local airflow/logs mount) for which one."
+        noDataState: OK
         execErrState: Error
 
       - uid: mdp-airflow-scheduler-stalled

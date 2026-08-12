@@ -6,6 +6,27 @@
 # point at. All 4 rules (rules.yml) share this one flat default
 # policy (no nested routes/matchers), so this single change is what
 # moves all 4 onto the real channel -- no per-rule change needed.
+#
+# Update, 2026-08-12: fanned out to both mdp-telegram and mdp-email
+# (contactpoints.yml) -- user's explicit choice: the 4 existing rules
+# notify both channels together, not Telegram-only with email held
+# back as an unrouted option.
+#
+# Standard Alertmanager/Grafana fan-out-to-multiple-receivers idiom:
+# two nested routes, both with no matchers (so both match every
+# alert, same as the root policy itself matching everything with no
+# matchers). The first has continue: true, so after it handles the
+# alert, evaluation continues to its sibling instead of stopping --
+# without continue: true, only the first matching route would ever
+# fire. The root policy's own `receiver` field is required syntax but
+# effectively a dead fallback here: since a matcher-less child always
+# matches, the root's own receiver is never reached in practice.
+# Confirmed against a real upstream example (object_matchers-based
+# nested route, not a fan-out one, but same schema):
+# github.com/grafana/provisioning-alerting-examples
+# config-files/grafana/provisioning/alerting/alert_resources.yaml --
+# validated live after applying, not just by reading the schema (see
+# roadmap-next-steps.md for the real evaluation/delivery confirmation).
 
 apiVersion: 1
 
@@ -13,3 +34,7 @@ policies:
   - orgId: 1
     receiver: mdp-telegram
     group_by: ["grafana_folder", "alertname"]
+    routes:
+      - receiver: mdp-telegram
+        continue: true
+      - receiver: mdp-email
