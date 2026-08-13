@@ -24,12 +24,18 @@ artifact of them, not the other way around.
 | # | File | Question | Card ID | Chart |
 |---|------|----------|---------|-------|
 | 1 | `01_total_orders.sql` | Total de Pedidos | 40 | scalar |
-| 2 | `02_orders_by_day.sql` | Pedidos por Dia | 41 | bar |
+| 2 | `02_orders_by_status.sql` | Pedidos por Status | 41 | bar |
 | 3 | `03_top_products_by_revenue.sql` | Top Produtos por Receita | 42 | row (horizontal bar) |
 | 4 | `04_top_sellers_by_orders.sql` | Top Vendedores por Nº de Pedidos | 43 | row (horizontal bar) |
 | 5 | `05_average_order_value.sql` | Ticket Médio | 44 | scalar |
 
-Layout: the two scalars side by side on top, "Pedidos por Dia"
+**2026-08-13 revision**: replaced "Pedidos por Dia" (card 41) with
+"Pedidos por Status" -- see `02_orders_by_status.sql`'s own header for
+why, and the "Color palette" section below for the new per-card
+colors applied across all 5 cards. Original file kept in git history,
+not just discarded (`git log -- dashboards/metabase/02_orders_by_day.sql`).
+
+Layout: the two scalars side by side on top, "Pedidos por Status"
 full-width below them, the two `row` charts side by side (2 columns)
 at the bottom.
 
@@ -40,10 +46,13 @@ don't behave the way a real marketplace's would. Checked the
 cardinality of each metric against real Athena data before deciding
 whether it was worth building:
 
-- **`order_status` has cardinality 1** (only `PENDING` exists today —
-  see `docs/architecture/roadmap-next-steps.md`, "Simulator -- order
-  status progression engine"). No "orders by status" metric here —
-  it would just be a single bar, misleading as a dashboard tile.
+- **`order_status` had cardinality 1 when this dashboard was first
+  built** (only `PENDING` existed then). No longer true as of
+  2026-08-13 — see `02_orders_by_status.sql`'s own header for the
+  organic trickle that unblocked it, and the "Color palette" section
+  below for how that card is colored. Left here as a dated note, not
+  removed outright, since it explains why this dashboard didn't have
+  a status breakdown for its first revision.
 - **`customers`, `products`, and `orders` are all ~137k rows, roughly
   1:1** — the simulator doesn't generate realistic reuse (a customer
   placing multiple orders, a product sold to multiple customers). A
@@ -64,20 +73,26 @@ whether it was worth building:
   rows (~3.4 line items/product on average). "Top Produtos por
   Receita" reflects a real, non-flat distribution (top product here
   is ~3M in revenue against a long tail), not an artifact.
-- **"Pedidos por Dia" covers only 3 real days** (2026-08-01 to
-  2026-08-03 — this is genuinely all the data the simulator has
-  generated so far, not a query bug). The daily volume itself is a
-  real, steep ramp-up (1,000 → 12,149 → 124,058 orders/day), not
-  flat — but a 3-point chart is still a 3-point chart. No date-range
-  dashboard filter was added for this reason: filtering a 3-day
-  window doesn't add anything yet. **Open question, not decided
-  here**: whether a bar chart is still the best visualization for 3
-  points, or whether something simpler (e.g. 3 scalars, or a table)
-  would communicate this better until there's enough daily history
-  for a real trend line — left as a bar chart for now since changing
-  chart family is a bigger call than the formatting/layout work this
-  pass covered. Revisit alongside the day-vs-month granularity
-  question once the simulator has run longer.
+- **"Pedidos por Dia" was replaced, not kept as a second card** — it
+  only ever covered 3 real days (2026-08-01 to 2026-08-03, a genuine
+  ramp-up, not a query bug), and stayed frozen there regardless of how
+  much later data existed, since nothing in the simulator generates
+  more distinct days on its own. "Pedidos por Status" replaces it
+  because it reflects data that's actually changing now (the org-status
+  trickle); the day-vs-month granularity question this caveat used to
+  raise is moot without a day-grain card on the dashboard, and can come
+  back if a real multi-day trend is ever worth charting again.
+- **Every card here reads from `fact_orders`/`int_order_items_enriched`
+  in Gold, refreshed only by a manual `marketplace_batch_pipeline`
+  run** (`schedule=None` — see `docs/architecture/roadmap-next-steps.md`).
+  Numbers on this dashboard are a snapshot as of the last successful
+  run, not live against Postgres — confirmed live 2026-08-13: Gold's
+  `fact_orders` sat stale at a 2026-08-11 snapshot (137,207 orders)
+  through a same-day 138k-order backfill and a ~170-order trickle test,
+  because nobody re-ran the pipeline successfully in between (3 manual
+  attempts that day failed, all traced to unrelated test scaffolding
+  for the `mdp-pipeline-stale` alert, not a real pipeline bug). Not a
+  Metabase-side cache or filter issue — re-run the DAG to refresh.
 
 ## Why `int_order_items_enriched` is `materialized='table'`
 
@@ -169,6 +184,69 @@ that leave no diff). Confirmed by reading each setting back
   full-width stacked (`size_x: 24` each, one above the other) if they
   look cramped.
 
+## Color palette (2026-08-13)
+
+Instance-wide theming is still unavailable (see the "Instance color
+palette" note above — unchanged). What's new here is the per-card
+`series_settings.<dimension-value>.color` override the note above
+already flagged as the real mechanism, applied consistently across
+all 5 cards instead of the auto-assigned, no-particular-reason colors
+they had before (yellow on card 42, blue on card 43, arrived at by
+Metabase's own default rotation, not a choice). Picked via this
+project's `dataviz` skill — every hex below is a documented, pre-
+validated slot from that skill's reference palette, none invented for
+this dashboard.
+
+**Volume vs. financial** — one hue per metric family, applied to every
+card of that family:
+
+| Family | Color | Hex | Cards |
+|---|---|---|---|
+| Volume (counts) | blue (categorical slot 1) | `#2a78d6` | Total de Pedidos (40), Top Vendedores por Nº de Pedidos (43) |
+| Financial (R$) | orange (categorical slot 2) | `#eb6834` | Top Produtos por Receita (42), Ticket Médio (44) |
+
+Blue/orange are slots 1 and 2 of the skill's documented 8-hue
+categorical order — already validated as an adjacent pair (CVD ΔE 9.1
+light / 8.4 dark, above the 8 target), not a new combination.
+
+**Pedidos por Status (card 41)** — modeled as an ordinal ramp for the
+4 in-flight stages plus 2 fixed status tokens for the terminal states,
+not 6 unrelated categorical colors, because that's what the data
+actually is (a funnel with two outcomes):
+
+| Status | Role | Hex |
+|---|---|---|
+| PENDING | ordinal step 1/4 | `#86b6ef` |
+| PAID | ordinal step 2/4 | `#5598e7` |
+| PROCESSING | ordinal step 3/4 | `#2a78d6` |
+| SHIPPED | ordinal step 4/4 | `#1c5cab` |
+| DELIVERED | status "good" (fixed) | `#0ca30c` |
+| CANCELLED | status "critical" (fixed) | `#d03b3b` |
+
+The 4 ordinal steps are the skill's documented sequential-blue ramp
+(steps 250/350/450/550) — darker means further along, and the ramp
+starts at step 250 specifically because the skill's own ordinal rule
+requires the lightest step to still clear 2:1 contrast on a white
+surface. DELIVERED/CANCELLED deliberately break into a different hue
+family (green/red) so a terminal outcome never reads as "just another
+stage." Green-vs-red next to each other is the classic red-green CVD
+collision; the mitigation here is that they're never color-alone —
+`order_status`'s own text label sits on every bar's x-axis position by
+construction, not an extra element added for accessibility.
+
+`status_order` (see `02_orders_by_status.sql`) exists so this reads
+left-to-right as PENDING → PAID → PROCESSING → SHIPPED → DELIVERED →
+CANCELLED, not Metabase's default alphabetical dimension order, which
+would scatter the two terminal states apart from each other and break
+the ramp's progression reading.
+
+**Not re-validated with the skill's own script in this pass** — `node`
+isn't available in the environment this was built in, so the check was
+done by construction (every value above is copied from the skill's
+already-validated reference table, not a new combination run through
+the validator fresh). Worth an actual `validate_palette.js` run
+opportunistically if `node` becomes available.
+
 ## Recreating this dashboard from scratch (Serialization isn't available)
 
 If Metabase is ever recreated (a fresh `postgres-metabase` volume, a
@@ -217,3 +295,7 @@ the API, same as it was built:
 6. **Instance-wide appearance (color palette) cannot be scripted on
    this edition** — see the caveat above. Skip it; it's gated behind
    a Pro/Enterprise feature flag (`:whitelabel`), not a missing script.
+   Per-card colors are NOT skipped, though — re-apply the hex values
+   from the "Color palette" section above via each card's
+   `series_settings` (`PUT /api/card/:id`) once every question is
+   re-created.
