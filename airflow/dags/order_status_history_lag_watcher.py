@@ -10,6 +10,18 @@ interval spends real resources checking even when nothing changed;
 this DAG only fires the heavy pipeline when there is real new
 order_status_history data to pick up.
 
+Runs forever once started, with no manual re-trigger ever needed in
+normal operation: each cycle re-triggers the next one itself
+(restart_watch_cycle, see below) the moment it ends, rather than
+waiting on schedule=timedelta(days=1) alone -- that schedule is kept
+only as a coarse safety net, not the primary mechanism (see below for
+why relying on it alone left a real gap). Needs exactly one manual
+`airflow dags trigger order_status_history_lag_watcher` to start the
+first cycle after this DAG is deployed or has been paused; every cycle
+after that starts itself. Before that first (or any manual re-)trigger,
+check scripts/check_lag_watcher_would_fire.sh first -- see that
+script's own header for why.
+
 Signal used: mdp_bronze_records_written_total{entity="order_status_
 history"}, already emitted by bronze_consumer.py (a Prometheus
 Counter, scraped directly every 15s per infrastructure/docker/
@@ -61,25 +73,71 @@ order_status_history_lag_watcher_poke_interval_seconds <seconds>`) if
 faster reaction is ever needed; no code change required, takes effect
 on the DAG's next parse.
 
-HttpSensor(deferrable=True): the wait happens in the triggerer process
-(this project already runs a dedicated airflow-triggerer container,
-unused by any other DAG until this one) instead of holding a worker
-slot for up to 23h -- negligible cost regardless of how the interval
-above is tuned later.
+HttpSensor(mode="reschedule"), not deferrable=True: originally used
+deferrable=True on the assumption the wait would happen in the
+triggerer process (this project already runs a dedicated
+airflow-triggerer container, unused by any other DAG until this one)
+instead of holding a worker slot. Found live, checking the running
+task_instance's own state (state='running', pool='default_pool', not
+'deferred') that this was never actually true: HttpSensor.execute()
+only defers when no response_check is given --
+`if not self.deferrable or self.response_check: return
+super().execute(...)` -- and this DAG needs response_check to
+interpret Prometheus' JSON, so deferrable=True was silently ignored
+the entire time, holding a real worker slot for up to 23h per cycle.
+mode="reschedule" is the fix that's actually compatible with a custom
+response_check: still releases the worker slot between pokes (the
+task instance goes to `up_for_reschedule` and the scheduler re-queues
+it at the next poke_interval, rather than one process blocking/
+sleeping in a loop) -- not literally free like a real deferred wait
+would be, but genuinely cheap, and correct about what it's actually
+doing.
 
-schedule=timedelta(days=1) + timeout=23h + soft_fail=True: not a
-literal "poke forever in one DagRun" -- each day's DagRun watches for
-up to 23h, and either the transition fires (downstream task runs) or
-it times out softly (not a failure, nothing happened that day) before
-the next day's scheduled run starts a fresh watch. Avoids one DagRun
-that in principle never ends, while still checking continuously in
-practice. max_active_runs=1 keeps a new day's run from starting before
-the previous one has actually finished (fired or timed out).
+restart_watch_cycle (TriggerDagRunOperator targeting this same DAG,
+trigger_rule="none_failed"): this is what makes the DAG actually
+continuous. schedule=timedelta(days=1) alone was a real gap, found
+live: the moment sense_new_records_written succeeds (a genuine
+transition fires marketplace_batch_pipeline), that DagRun completes
+right then -- but the *next* automatic DagRun isn't due until the next
+calendar day's schedule slot, so watching stops for up to ~24h
+immediately after the one moment it just proved useful. This isn't a
+testing artifact -- it's what schedule=timedelta(days=1) does on every
+real fire, not just during development. restart_watch_cycle closes
+that gap by triggering a fresh instance of this same DAG the moment
+the current cycle ends, success or skip, so the next watch starts
+immediately instead of waiting for tomorrow.
+
+trigger_rule="none_failed" (not "all_done"): the distinction that
+matters is soft_fail's own scope, confirmed by reading
+BaseSensorOperator.execute()'s real source -- soft_fail only converts
+a *timeout* (run_duration() > self.timeout, or AirflowSensorTimeout/
+AirflowTaskTimeout/AirflowFailException) into AirflowSkipException
+(task state 'skipped'). Any other exception raised inside poke() --
+Prometheus unreachable, a malformed response, a real query error --
+is not caught by soft_fail at all; it propagates normally and the task
+ends 'failed'. "all_done" would restart the watch cycle in both cases
+alike, silently looping forever on a real, persistent failure with
+each cycle immediately failing again -- never detecting anything,
+never surfacing that anything is wrong. "none_failed" runs on
+'success' (fired) and 'skipped' (benign timeout) but not on 'failed'
+(a real error) -- the chain keeps itself alive through ordinary
+operation and stops, visibly, on a real problem, rather than masking
+one. schedule=timedelta(days=1) is still there as a coarse safety
+net for exactly that stopped case (and for restarting the chain after
+any other reason it might ever break, e.g. an Airflow restart at the
+wrong moment) -- it retries automatically within at most 24h even if
+nobody notices the failed DagRun right away, without needing the
+self-restart chain to be perfectly unbreakable.
+
+max_active_runs=1 keeps the self-triggered next cycle and the daily
+schedule's own slot from ever running concurrently against each
+other.
 
 TriggerDagRunOperator's default wait_for_completion=False is
-deliberately left as-is: this task's job is to fire
-marketplace_batch_pipeline, not babysit it -- the pipeline's own tasks
-already verify their own success (see that DAG's docstring).
+deliberately left as-is on both TriggerDagRunOperator tasks: neither
+this DAG's job (fire-and-move-on) nor marketplace_batch_pipeline's own
+tasks (which already verify their own success, see that DAG's
+docstring) need it.
 
 Author: Modern Data Platform
 License: MIT
@@ -153,7 +211,7 @@ def order_status_history_lag_watcher():
         poke_interval=_poke_interval_seconds,
         timeout=_SENSOR_TIMEOUT_SECONDS,
         soft_fail=True,
-        deferrable=True,
+        mode="reschedule",
     )
 
     trigger_marketplace_batch_pipeline = TriggerDagRunOperator(
@@ -161,7 +219,17 @@ def order_status_history_lag_watcher():
         trigger_dag_id="marketplace_batch_pipeline",
     )
 
+    # Always restarts the watch cycle -- on 'success' (fired) or
+    # 'skipped' (benign timeout) alike -- but not on 'failed' (a real
+    # error). See module docstring for why this, not "all_done".
+    restart_watch_cycle = TriggerDagRunOperator(
+        task_id="restart_watch_cycle",
+        trigger_dag_id="order_status_history_lag_watcher",
+        trigger_rule="none_failed",
+    )
+
     sense_new_records_written >> trigger_marketplace_batch_pipeline
+    sense_new_records_written >> restart_watch_cycle
 
 
 order_status_history_lag_watcher()
