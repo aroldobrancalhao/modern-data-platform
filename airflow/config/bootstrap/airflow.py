@@ -193,6 +193,21 @@ class AirflowManager:
                 "description": "Kafka Bootstrap Server",
                 "host": self._env("KAFKA_BOOTSTRAP_SERVER"),
             },
+            {
+                "conn_id": "prometheus_default",
+                "conn_type": "http",
+                "description": (
+                    "Prometheus HTTP API (PromQL queries) -- same "
+                    "instance the Grafana alert rules already query "
+                    "(datasourceUid PBFA97CFB590B2093), reached here "
+                    "directly over HTTP instead of through Grafana. "
+                    "No auth in this dev environment, same as every "
+                    "other internal service on mdp-network."
+                ),
+                "host": "prometheus",
+                "port": 9090,
+                "schema": "http",
+            },
         ]
 
     # ------------------------------------------------------------------
