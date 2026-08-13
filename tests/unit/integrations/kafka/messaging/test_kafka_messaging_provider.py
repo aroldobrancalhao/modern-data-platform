@@ -1,17 +1,18 @@
 """
 Modern Data Platform
 
-Unit tests for KafkaMessagingProvider.recover_from_lost_assignment() --
-the real consumer-discard-and-recreate mechanics behind the Bronze
-Consumer livelock fix (see
+Unit tests for KafkaMessagingProvider.recover_from_lost_assignment()
+and commit()'s timeout bound -- the real consumer-discard-and-recreate
+mechanics behind the Bronze Consumer livelock fix (see
 tests/unit/streaming/consumers/test_bronze_consumer.py for the
 behavioral tests against the fake provider, and
 docs/architecture/roadmap-next-steps.md, "commit-failure retry can
-livelock an entity permanently", for the incident this fixes).
+livelock an entity permanently" and "Issue 2", for the incidents these
+fix).
 
-No real Kafka broker involved -- KafkaContext is never touched by this
-method, only the provider's own consumer cache, so a MagicMock stands
-in for the cached confluent_kafka.Consumer (same style as
+No real Kafka broker involved -- KafkaContext is never touched by
+either method, only the provider's own consumer cache, so a MagicMock
+stands in for the cached confluent_kafka.Consumer (same style as
 tests/unit/integrations/s3/storage/test_s3_storage_provider.py).
 
 Author: Modern Data Platform
@@ -20,13 +21,16 @@ License: MIT
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock
 
 import pytest
 from confluent_kafka import KafkaError, KafkaException
 
 from integrations.kafka.core.kafka_context import KafkaContext
+from integrations.kafka.messaging import kafka_messaging_provider
 from integrations.kafka.messaging.kafka_messaging_provider import (
+    CommitTimeoutError,
     KafkaMessagingProvider,
 )
 
@@ -124,6 +128,89 @@ def test_a_failing_close_does_not_prevent_the_consumer_from_being_discarded(
 
     assert recovered is True
     assert (_TOPIC, _GROUP_ID) not in provider._consumers
+
+
+def test_commit_calls_the_underlying_synchronous_commit(
+    provider: KafkaMessagingProvider,
+) -> None:
+    consumer = MagicMock()
+    provider._consumers[(_TOPIC, _GROUP_ID)] = consumer
+
+    provider.commit(_TOPIC, _GROUP_ID)
+
+    consumer.commit.assert_called_once_with(asynchronous=False)
+
+
+def test_commit_reraises_a_synchronous_commit_failure_without_waiting_for_the_timeout(
+    provider: KafkaMessagingProvider,
+) -> None:
+    """
+    A commit() call that fails promptly (e.g. a broker-side rejection)
+    must surface that real error as-is, not get masked by
+    CommitTimeoutError -- the background thread it runs on finishes
+    right away in this case, well inside _COMMIT_TIMEOUT_SECONDS.
+    """
+    consumer = MagicMock()
+    error = KafkaException(
+        KafkaError(KafkaError._TRANSPORT, "simulated broker rejection")
+    )
+    consumer.commit.side_effect = error
+    provider._consumers[(_TOPIC, _GROUP_ID)] = consumer
+
+    with pytest.raises(KafkaException) as excinfo:
+        provider.commit(_TOPIC, _GROUP_ID)
+
+    assert excinfo.value is error
+
+
+def test_commit_raises_commit_timeout_error_when_the_synchronous_commit_hangs(
+    provider: KafkaMessagingProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The incident this covers (docs/architecture/roadmap-next-steps.md,
+    "Issue 2"): consumer.commit(asynchronous=False) has no timeout
+    parameter of its own and can block indefinitely if the broker's
+    group coordinator is unstable at the moment it's called. This must
+    surface as a CommitTimeoutError within _COMMIT_TIMEOUT_SECONDS, not
+    hang the caller forever -- same "genuinely never returns" pattern
+    as test_bronze_consumer.py's simulate_poll_timeout=True case.
+
+    _COMMIT_TIMEOUT_SECONDS is monkeypatched down to keep this test
+    fast; the mocked commit() sleeps past that patched value, not past
+    the real 60s default.
+    """
+    monkeypatch.setattr(
+        kafka_messaging_provider, "_COMMIT_TIMEOUT_SECONDS", 0.05
+    )
+
+    consumer = MagicMock()
+    consumer.commit.side_effect = lambda **_: time.sleep(0.3)
+    provider._consumers[(_TOPIC, _GROUP_ID)] = consumer
+
+    with pytest.raises(CommitTimeoutError):
+        provider.commit(_TOPIC, _GROUP_ID)
+
+
+def test_recover_from_lost_assignment_discards_and_closes_the_consumer_on_a_commit_timeout(
+    provider: KafkaMessagingProvider,
+) -> None:
+    """
+    Mirrors test_discards_and_closes_the_cached_consumer_on_assignment_lost
+    above -- a CommitTimeoutError must trigger the exact same
+    discard-and-rejoin recovery as _ASSIGNMENT_LOST, since both leave
+    the existing consumer's state unrecoverable by a plain retry.
+    """
+    consumer = MagicMock()
+    provider._consumers[(_TOPIC, _GROUP_ID)] = consumer
+
+    recovered = provider.recover_from_lost_assignment(
+        _TOPIC, _GROUP_ID, error=CommitTimeoutError("simulated hung commit")
+    )
+
+    assert recovered is True
+    assert (_TOPIC, _GROUP_ID) not in provider._consumers
+    consumer.close.assert_called_once()
 
 
 def test_returns_true_even_if_no_consumer_was_ever_cached_for_the_pair(

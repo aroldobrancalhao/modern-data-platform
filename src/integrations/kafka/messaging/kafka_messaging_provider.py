@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import cast
 
 from confluent_kafka import Consumer
@@ -12,6 +13,44 @@ from data_platform.messaging.messaging_provider import MessagingProvider
 from data_platform.messaging.models import Message
 
 from integrations.kafka.core.kafka_context import KafkaContext
+
+# Bounds commit()'s synchronous consumer.commit(asynchronous=False)
+# call. confluent-kafka's Consumer.commit() takes no timeout
+# parameter of its own -- KafkaContext.create_consumer() bounds a
+# single broker round trip (socket.timeout.ms=30000) and how long a
+# silent coordinator is tolerated before this consumer is evicted
+# from the group (session.timeout.ms=45000, surfaced as
+# KafkaError._ASSIGNMENT_LOST, already handled by
+# recover_from_lost_assignment()), but neither bounds retries at the
+# librdkafka client level -- a persistently unstable coordinator can
+# still keep the call blocked past both. 60s leaves room for one full
+# retried request-response cycle at socket.timeout.ms's 30s (30 + 30)
+# before this blunter, client-side deadline fires, and is itself
+# beyond session.timeout.ms's 45s so the more specific
+# _ASSIGNMENT_LOST path gets a chance to fire first (see
+# KafkaContext.create_consumer()'s own comments). This is the fix for
+# docs/architecture/roadmap-next-steps.md's "Issue 2": a hung
+# commit() with no bound anywhere silently stopped one entity's
+# flushes for ~9h with no error, no crash, and no metric signal.
+_COMMIT_TIMEOUT_SECONDS = 60
+
+
+class CommitTimeoutError(Exception):
+    """
+    Raised by commit() when the underlying synchronous
+    Consumer.commit(asynchronous=False) call does not return within
+    _COMMIT_TIMEOUT_SECONDS.
+
+    Past this deadline, whether the commit actually landed on the
+    broker is unknown -- the call keeps running on a background
+    thread (Python cannot forcibly stop a thread blocked inside
+    librdkafka's C extension) and may still succeed, fail, or keep
+    hanging at any point after this exception is raised. The only
+    safe response is to stop trusting this Consumer instance rather
+    than retry against it -- see recover_from_lost_assignment(),
+    which treats this the same as KafkaError._ASSIGNMENT_LOST for
+    exactly that reason.
+    """
 
 
 class KafkaMessagingProvider(MessagingProvider):
@@ -113,7 +152,40 @@ class KafkaMessagingProvider(MessagingProvider):
                 "any consume() call resolved a consumer for that pair."
             )
 
-        consumer.commit(asynchronous=False)
+        # consumer.commit(asynchronous=False) has no timeout parameter
+        # of its own (see _COMMIT_TIMEOUT_SECONDS above), so the bound
+        # is enforced here instead: run it on a background thread and
+        # stop waiting after _COMMIT_TIMEOUT_SECONDS. daemon=True so
+        # a thread that never returns can't block process exit; left
+        # unjoined past the timeout deliberately -- joining further
+        # would just reintroduce the same unbounded wait this exists
+        # to remove. A second thread later calling close() on this
+        # same Consumer while this one is still stuck inside it (the
+        # CommitTimeoutError path below) is safe: librdkafka's
+        # rd_kafka_t handles are documented safe for concurrent calls
+        # from multiple threads, and any exception either call raises
+        # as a result is already caught here or in
+        # recover_from_lost_assignment()'s own close().
+        commit_errors: list[Exception] = []
+
+        def _commit() -> None:
+            try:
+                consumer.commit(asynchronous=False)
+            except Exception as exc:  # noqa: BLE001 -- re-raised on the caller's thread below, not swallowed
+                commit_errors.append(exc)
+
+        commit_thread = threading.Thread(target=_commit, daemon=True)
+        commit_thread.start()
+        commit_thread.join(_COMMIT_TIMEOUT_SECONDS)
+
+        if commit_thread.is_alive():
+            raise CommitTimeoutError(
+                f"commit() for ({topic!r}, {group_id!r}) did not "
+                f"return within {_COMMIT_TIMEOUT_SECONDS}s."
+            )
+
+        if commit_errors:
+            raise commit_errors[0]
 
     def recover_from_lost_assignment(
         self,
@@ -121,10 +193,18 @@ class KafkaMessagingProvider(MessagingProvider):
         group_id: str,
         error: Exception,
     ) -> bool:
-        if not (
+        is_assignment_lost = (
             isinstance(error, KafkaException)
             and error.args[0].code() == KafkaError._ASSIGNMENT_LOST
-        ):
+        )
+
+        # CommitTimeoutError means commit()'s outcome is unknown and
+        # may still be running on its own background thread (see that
+        # class's docstring) -- just as unrecoverable by retrying
+        # against the same Consumer as _ASSIGNMENT_LOST, since a
+        # retried commit() would face the exact same risk of never
+        # returning.
+        if not (is_assignment_lost or isinstance(error, CommitTimeoutError)):
             return False
 
         cache_key = (topic, group_id)
@@ -135,14 +215,19 @@ class KafkaMessagingProvider(MessagingProvider):
             try:
                 consumer.close()
             except Exception:
-                # Best-effort only: the whole point of _ASSIGNMENT_LOST
-                # is that the broker already stopped considering this
-                # consumer a group member, so a clean leave-group on
-                # close() isn't guaranteed to succeed -- and doesn't
-                # need to. Discarding the reference above (so the next
-                # _resolve_consumer() call builds a fresh replacement)
-                # is what actually matters; swallowing a close()
-                # failure here must not stop that from happening.
+                # Best-effort only: for _ASSIGNMENT_LOST, the broker
+                # already stopped considering this consumer a group
+                # member, so a clean leave-group on close() isn't
+                # guaranteed to succeed. For CommitTimeoutError, the
+                # abandoned commit() thread may still be running
+                # concurrently against this same Consumer -- close()
+                # racing with it is expected, not a bug (see commit()'s
+                # own comment on why that's safe). Either way, a clean
+                # close() isn't required: discarding the reference
+                # above (so the next _resolve_consumer() call builds a
+                # fresh replacement) is what actually matters;
+                # swallowing a close() failure here must not stop that
+                # from happening.
                 pass
 
         return True

@@ -127,14 +127,17 @@ class MessagingProvider(BaseProvider, ABC):
         """
         Given an exception raised by a prior commit() call, discards
         and replaces the underlying consumer for (topic, group_id) if
-        ``error`` reflects this provider's specific, unrecoverable
-        group-membership-loss condition (Kafka: ``_ASSIGNMENT_LOST`` --
-        the broker no longer considers this consumer a group member at
-        all) -- one a plain retry cannot resolve, since the existing
-        consumer keeps presenting the same stale/revoked membership to
-        the broker no matter how many times commit() is retried
-        against it (see docs/architecture/roadmap-next-steps.md,
-        "commit-failure retry can livelock an entity permanently").
+        ``error`` reflects one of this provider's specific,
+        unrecoverable conditions under which the existing consumer can
+        no longer be trusted -- one a plain retry cannot resolve,
+        since retrying commit() against the same consumer faces the
+        exact same failure again. For the Kafka provider this means
+        ``_ASSIGNMENT_LOST`` (the broker no longer considers this
+        consumer a group member at all -- see
+        docs/architecture/roadmap-next-steps.md, "commit-failure retry
+        can livelock an entity permanently") or a commit that exceeded
+        the provider's own timeout with its outcome left unknown (see
+        KafkaMessagingProvider.CommitTimeoutError).
 
         Returns True if a rejoin was performed -- the caller (Bronze
         Consumer's ``_flush()``) is then responsible for abandoning the

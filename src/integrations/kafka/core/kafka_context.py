@@ -101,5 +101,33 @@ class KafkaContext:
                 # the smaller prefetch buffer never became the
                 # bottleneck the pre-change analysis worried it might.
                 "queued.max.messages.kbytes": 16384,
+                # Bounds a single broker request/response round trip
+                # (includes OffsetCommit, not just Fetch/Metadata) --
+                # librdkafka's default is 60000 (60s) but leaving it
+                # implicit meant nothing in this codebase actually
+                # documented or chose that number. Lowered to 30s so a
+                # commit's KafkaMessagingProvider-level deadline
+                # (_COMMIT_TIMEOUT_SECONDS, kafka_messaging_provider.py)
+                # has room for one full retried request-response cycle
+                # (30s + 30s) before that outer deadline fires, instead
+                # of the two timeouts racing at the same value.
+                "socket.timeout.ms": 30000,
+                # Bounds how long the broker will wait without a
+                # heartbeat before evicting this consumer from the
+                # group (librdkafka sends heartbeats on its own
+                # background thread, independent of application
+                # poll() calls). This is the mechanism that turns a
+                # genuinely unresponsive coordinator into a concrete,
+                # recognizable group-membership error (surfaced as
+                # KafkaError._ASSIGNMENT_LOST, already handled by
+                # recover_from_lost_assignment()) -- kept at
+                # librdkafka's own default (45000ms) but made explicit
+                # rather than implicit, and deliberately under
+                # _COMMIT_TIMEOUT_SECONDS (60s) so this more specific,
+                # self-healing path gets a chance to fire before that
+                # blunter fallback deadline does. See the incident
+                # this responds to in
+                # docs/architecture/roadmap-next-steps.md ("Issue 2").
+                "session.timeout.ms": 45000,
             }
         )
