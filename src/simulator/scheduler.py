@@ -17,6 +17,7 @@ from simulator.domain.inventory.restock_service import RestockService
 from simulator.domain.inventory.warehouse_service import WarehouseService
 from simulator.domain.logistics.shipment_service import ShipmentService
 from simulator.domain.orders.order_service import OrderService
+from simulator.domain.orders.order_status_service import OrderStatusService
 from simulator.domain.payments.payment_service import PaymentService
 from simulator.domain.reviews.review_service import ReviewService
 
@@ -33,6 +34,7 @@ class MarketplaceScheduler:
         self._inventory_service = InventoryService()
         self._restock_service = RestockService()
         self._order_service = OrderService()
+        self._order_status_service = OrderStatusService()
         self._payment_service = PaymentService()
         self._shipment_service = ShipmentService()
         self._review_service = ReviewService()
@@ -98,6 +100,18 @@ class MarketplaceScheduler:
                 self.run_cycle(connection, writer, pool)
 
             writer.flush()
+
+            # Once per batch (tick), not once per cycle -- this walks
+            # existing orders forward in time, it doesn't create one
+            # per cycle the way run_cycle()'s other calls do. See
+            # OrderStatusService's own docstring.
+            counts = self._order_status_service.progress_eligible_orders(connection)
+
+            if counts["advanced"] or counts["cancelled"]:
+                print(
+                    f"Order status progression: {counts['advanced']} advanced, "
+                    f"{counts['cancelled']} cancelled"
+                )
 
         print("\nBatch finished.\n")
 
