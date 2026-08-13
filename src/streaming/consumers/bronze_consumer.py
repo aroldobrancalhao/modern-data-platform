@@ -110,6 +110,19 @@ _CONSUMER_GROUP_ID = "bronze-consumer"
 
 _MAX_BATCH_SIZE = 100
 
+# Per-entity flush-threshold override, same shape and same purpose as
+# _MAX_POLL_BATCH_SIZE_OVERRIDES below -- resolved once per entity at
+# buffer-creation time (see _EntityBuffer.max_batch_size and the
+# `buffers = {...}` comprehension in run_bronze_consumer()). Empty by
+# default; used 2026-08-12 for a temporary order_status_history entry
+# (300, up from the default 100) while draining that entity's one-off
+# ~400K-message backfill backlog, removed the same session once that
+# backlog reached zero -- see docs/architecture/roadmap-next-steps.md
+# for the real before/after throughput measured (+184%) and the
+# memory-margin math behind the 300 value, kept there rather than here
+# since the override itself is gone.
+_MAX_BATCH_SIZE_OVERRIDES: dict[str, int] = {}
+
 # Caps a single consume_batch() call independently of _MAX_BATCH_SIZE
 # (the buffer's own flush threshold): 100 messages fetched and
 # flushed in one shot, under real backlog, was enough to OOM a fresh
@@ -278,6 +291,13 @@ class _EntityBuffer:
 
     rounds_since_last_poll: int = 0
 
+    # This buffer's own effective flush threshold -- _MAX_BATCH_SIZE
+    # by default, or this entity's _MAX_BATCH_SIZE_OVERRIDES value,
+    # resolved once at buffer-creation time (see the `buffers = {...}`
+    # comprehension below) rather than looked up by entity name on
+    # every is_due() call.
+    max_batch_size: int = _MAX_BATCH_SIZE
+
     def add(self, record: dict[str, Any]) -> None:
         if self.opened_at is None:
             self.opened_at = time.monotonic()
@@ -288,7 +308,7 @@ class _EntityBuffer:
         if not self.records:
             return False
 
-        if len(self.records) >= _MAX_BATCH_SIZE:
+        if len(self.records) >= self.max_batch_size:
             return True
 
         return (
@@ -359,7 +379,12 @@ def run_bronze_consumer(
         for entity in entities
     }
 
-    buffers = {entity: _EntityBuffer() for entity in entities}
+    buffers = {
+        entity: _EntityBuffer(
+            max_batch_size=_MAX_BATCH_SIZE_OVERRIDES.get(entity, _MAX_BATCH_SIZE)
+        )
+        for entity in entities
+    }
 
     in_flight: dict[str, Future[None]] = {}
 
@@ -445,7 +470,9 @@ def run_bronze_consumer(
                         # Caps the batch at whatever room is actually
                         # left in this entity's buffer (so a single
                         # consume_batch() call can't overshoot
-                        # _MAX_BATCH_SIZE) and at this entity's
+                        # buffer.max_batch_size -- _MAX_BATCH_SIZE, or
+                        # this entity's own _MAX_BATCH_SIZE_OVERRIDES
+                        # value if it has one) and at this entity's
                         # _MAX_POLL_BATCH_SIZE_OVERRIDES value if it has
                         # one, else the default _MAX_POLL_BATCH_SIZE
                         # (so it can't pull an OOM-sized burst in one
@@ -455,7 +482,7 @@ def run_bronze_consumer(
                         # below will flush it this same iteration,
                         # freeing capacity for the next one.
                         remaining = min(
-                            _MAX_BATCH_SIZE - len(buffer.records),
+                            buffer.max_batch_size - len(buffer.records),
                             _MAX_POLL_BATCH_SIZE_OVERRIDES.get(
                                 entity, _MAX_POLL_BATCH_SIZE
                             ),
