@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
         case_sensitive=False,
+        # extra="ignore": the root .env is shared by more than just
+        # this Settings class (e.g. METABASE_ADMIN_EMAIL/PASSWORD,
+        # added 2026-08-13 for ad-hoc Metabase API scripts, not a
+        # simulator field) -- pydantic-settings' default (extra=
+        # "forbid") made any var here that Settings doesn't declare a
+        # hard crash for every consumer of this class, discovered live
+        # when the simulator failed to start after that addition.
+        extra="ignore",
     )
 
 
