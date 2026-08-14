@@ -56,6 +56,7 @@ running engineering log.
 - Found that a monitoring alert believed to be working had actually never fired once, traced it to a subtle metrics-counter edge case, fixed it, and proved the fix by triggering a real failure end to end. ([details](docs/architecture/roadmap-next-steps.md))
 - Found a pipeline stage burning most of its runtime reinstalling dependencies on every single run instead of processing data, and eliminated the redundant work at the source. ([details](docs/architecture/roadmap-next-steps.md))
 - Diagnosed a data pipeline silently stuck for 9 hours with zero errors logged, down to one unguarded network call, using log archaeology and direct evidence rather than guesswork. ([details](docs/architecture/roadmap-next-steps.md))
+- An event-driven trigger's own self-restart logic re-fired the same already-handled signal 188 times in 30 minutes (2 runs reached real cloud compute) because the detection query had no memory of what it had already acted on -- replaced the rolling time window with a value watermark, then proved the fix by triggering the exact failure scenario twice in a row and confirming the second trigger correctly did nothing. ([details](docs/architecture/roadmap-next-steps.md))
 
 <!-- TODO: screenshot -- Grafana "Pipeline Health" dashboard
      URL: http://localhost:3000/d/mdp-pipeline-health (admin / the
@@ -576,7 +577,8 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 ## Phase 2 — CDC
 
 - ✅ PostgreSQL, Debezium, Kafka, and a streaming Bronze Consumer (continuous Kafka consumer, no Spark, independent from Airflow) all validated end to end against real infrastructure.
-- ✅ Real Airflow DAG (`marketplace_batch_pipeline`) orchestrating Postgres extraction → Databricks → dbt, validated live. Manual-trigger only (`schedule=None`) -- a 30-minute schedule was tried and validated live, then reverted the same day after driving a real AWS cost spike with no matching freshness need.
+- ✅ Real Airflow DAG (`marketplace_batch_pipeline`) orchestrating Postgres extraction → Databricks → dbt, validated live. `schedule=None` -- a 30-minute fixed schedule was tried and validated live, then reverted the same day after driving a real AWS cost spike with no matching freshness need.
+- ✅ Event-driven trigger (`order_status_history_lag_watcher`): fires `marketplace_batch_pipeline` only when there's real new `order_status_history` data to pick up, instead of checking on a fixed interval -- self-restarting, no manual re-trigger needed in normal operation. Watermarked (see Engineering Highlights) to guarantee each real signal fires exactly once.
 
 ## Phase 3 — Data Lake
 
@@ -585,6 +587,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 ## Phase 4 — Data Modeling
 
 - ✅ dbt star schema (staging → intermediate → dimensions/facts) against Athena/Glue, `dbt run`/`dbt test` green.
+- ✅ Order status history modeled through to Gold: `stg_order_status_history`, `fact_order_status_transitions` (one row per status transition, time-in-previous-status), and `fact_orders` extended with `delivered_at` -- 19/19 tests passing, validated against real production data (138k+ orders): 4.97% cancellation rate, 0.28h average delivery time.
 - ⬜ Metrics layer.
 
 ## Phase 5 — Analytics
