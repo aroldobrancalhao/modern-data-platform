@@ -27,6 +27,22 @@ history"}, already emitted by bronze_consumer.py (a Prometheus
 Counter, scraped directly every 15s per infrastructure/docker/
 monitoring/prometheus/prometheus.yml, no new instrumentation needed).
 
+**Update, 2026-08-14, real incident: this DAG fired
+marketplace_batch_pipeline 188 times in 30 minutes**, 2 of which
+reached real Databricks compute (see docs/architecture/
+roadmap-next-steps.md for the full incident record). Root cause: the
+original design below (increase() over a rolling window) has no
+memory of what it already fired on -- restart_watch_cycle creates a
+new cycle the instant the current one ends, and if the same real
+signal is still inside the new cycle's window (trivially true right
+after firing, since the window is 2x poke_interval), every new cycle
+re-detects it as "new" and fires again, immediately, forever until
+the window ages past the original write. Replaced with a value
+watermark (see _new_records_detected below) -- the rest of this
+docstring's reasoning about the counter itself (why this metric, not
+the Gauge) still holds and is kept as-is; the window/increase()
+reasoning that followed it is gone along with the code it justified.
+
 Originally designed against mdp_bronze_consumer_lag (a Gauge) instead,
 with a "was > 0 in the lookback window, is 0 now" condition -- found
 live, testing this DAG before considering it done, that the Gauge
@@ -50,12 +66,10 @@ in the last <window>" -- 0 at rest (nothing flushed, nothing to see),
 
     increase(mdp_bronze_records_written_total{entity="order_status_history"}[<window>]) > 0
 
-The window must be >= the poke interval, or a flush that happens
-between two pokes could in principle fall entirely outside the
-previous poke's lookback range. Set to 2x the poke interval below --
-full margin against scheduling jitter, and it scales automatically if
-the interval is ever changed, without needing a second number to keep
-in sync by hand.
+(No window anymore, per the 2026-08-14 update above -- the watermark
+comparison in _new_records_detected is time-independent: it doesn't
+matter how long since the last poke, only whether the counter's raw
+value has changed since the last time this DAG consumed it.)
 
 Poke interval is an Airflow Variable
 (order_status_history_lag_watcher_poke_interval_seconds, default
@@ -156,6 +170,7 @@ from airflow.providers.standard.operators.trigger_dagrun import (
 from requests import Response
 
 _POKE_INTERVAL_VARIABLE = "order_status_history_lag_watcher_poke_interval_seconds"
+_LAST_CONSUMED_VARIABLE = "order_status_history_lag_watcher_last_consumed_count"
 _DEFAULT_POKE_INTERVAL_SECONDS = 3600  # 1h
 
 _poke_interval_seconds = int(
@@ -165,31 +180,48 @@ _poke_interval_seconds = int(
     )
 )
 
-# See module docstring -- must be >= _poke_interval_seconds, 2x for
-# full margin, scales automatically with the Variable above.
-_window_seconds = _poke_interval_seconds * 2
-
-_PROMQL_QUERY = (
-    "increase(mdp_bronze_records_written_total"
-    f'{{entity="order_status_history"}}[{_window_seconds}s]) > 0'
-)
+# Raw instant value, not increase() over a window -- the watermark
+# comparison in _new_records_detected is what decides "new", not the
+# query itself. See module docstring, 2026-08-14 update.
+_PROMQL_QUERY = 'mdp_bronze_records_written_total{entity="order_status_history"}'
 
 _SENSOR_TIMEOUT_SECONDS = int(timedelta(hours=23).total_seconds())
 
 
 def _new_records_detected(response: Response) -> bool:
     """
-    True when Prometheus' instant-vector query returned at least one
-    time series. The query itself already encodes the full "records
-    were actually written recently" condition (see _PROMQL_QUERY
-    above) -- a non-empty result IS the event; an empty result just
-    means "nothing new yet", and HttpSensor re-pokes at the next
-    poke_interval.
+    True when the counter's current raw value differs from the last
+    value this DAG consumed (Variable _LAST_CONSUMED_VARIABLE,
+    default "0"). != rather than > on purpose: an increase means real
+    new writes; a decrease means the counter reset (bronze-consumer
+    restarted -- it's an in-memory prometheus_client Counter, no
+    persistence). Can't tell how much of a post-reset value is
+    genuinely new vs. already-seen, so the conservative choice is to
+    fire again rather than go silent forever waiting for the value to
+    climb back past a now-meaningless old watermark.
+
+    Side effect on True: updates the watermark to the current value,
+    right here -- this is the moment "new signal" was actually
+    observed, not a downstream task's success (see
+    docs/architecture/roadmap-next-steps.md's 2026-08-14 incident
+    entry for why increase()-over-a-window had no equivalent of this
+    and re-fired on the same already-consumed signal indefinitely).
     """
 
     payload = response.json()
+    results = payload.get("data", {}).get("result", [])
 
-    return len(payload.get("data", {}).get("result", [])) > 0
+    if not results:
+        return False  # metric doesn't exist yet -- nothing ever written
+
+    current_value = float(results[0]["value"][1])
+    last_consumed = float(Variable.get(_LAST_CONSUMED_VARIABLE, default_var="0"))
+
+    if current_value == last_consumed:
+        return False
+
+    Variable.set(_LAST_CONSUMED_VARIABLE, str(current_value))
+    return True
 
 
 @dag(
