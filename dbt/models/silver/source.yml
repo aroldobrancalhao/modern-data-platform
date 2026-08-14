@@ -33,3 +33,6 @@ sources:
 
       - name: categories
         description: Product categories, standardized.
+
+      - name: order_status_history
+        description: Order status change history, standardized.

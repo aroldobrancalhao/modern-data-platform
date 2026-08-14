@@ -56,3 +56,11 @@ models:
         tests:
           - not_null
           - unique
+
+  - name: stg_order_status_history
+    description: Staging model for the Silver order_status_history source -- explicit typing, no renaming, no business logic.
+    columns:
+      - name: history_id
+        tests:
+          - not_null
+          - unique

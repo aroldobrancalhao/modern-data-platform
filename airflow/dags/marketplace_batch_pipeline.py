@@ -83,6 +83,7 @@ ENTITIES: tuple[tuple[str, str], ...] = (
     ("payments", "marketplace.payments"),
     ("sellers", "marketplace.sellers"),
     ("categories", "marketplace.categories"),
+    ("order_status_history", "marketplace.order_status_history"),
 )
 
 DBT_PROJECT_DIR = "/opt/mdp/dbt"

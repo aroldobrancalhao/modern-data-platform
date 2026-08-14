@@ -59,6 +59,7 @@ ENTITIES: tuple[str, ...] = (
     "payments",
     "sellers",
     "categories",
+    "order_status_history",
 )
 
 

@@ -30,6 +30,17 @@
 -- combination when `ha` config is also true, which these models
 -- don't set) -- and it's the officially documented Athena CTAS
 -- syntax (WITH (external_location=..., partitioned_by=ARRAY[...])).
+--
+-- delivered_at: grouped by order_id (not a plain filter+join) on
+-- purpose -- even though the app code has no path that transitions
+-- an order away from DELIVERED (checked in order_status_service.py:
+-- it's never a key in _FORWARD_RULES or _CANCEL_PROBABILITY), this
+-- CTE doesn't just trust that from here. min(changed_at) keeps the
+-- model itself safe (picks the earliest DELIVERED event) even if
+-- that assumption is ever wrong; the singular test in
+-- dbt/tests/order_status_history_delivered_at_most_once.sql is what
+-- actually surfaces it loudly if a future order ever does get more
+-- than one.
 
 {{ config(
     materialized='table',
@@ -44,6 +55,18 @@ with order_item_aggregates as (
         sum(quantity) as total_quantity
 
     from {{ ref('stg_order_items') }}
+
+    group by order_id
+),
+
+delivered_dates as (
+    select
+        order_id,
+        min(changed_at) as delivered_at
+
+    from {{ ref('stg_order_status_history') }}
+
+    where current_status = 'DELIVERED'
 
     group by order_id
 )
@@ -66,6 +89,8 @@ select
     p.payment_method_id,
     p.paid_at,
 
+    d.delivered_at,
+
     ntile(3) over (order by o.total_amount) as order_value_tier,
 
     year(o.created_at) as order_year,
@@ -78,3 +103,6 @@ left join order_item_aggregates as oia
 
 left join {{ ref('stg_payments') }} as p
     on o.order_id = p.order_id
+
+left join delivered_dates as d
+    on o.order_id = d.order_id

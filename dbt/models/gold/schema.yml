@@ -130,3 +130,39 @@ models:
       - name: order_month
         tests:
           - not_null
+
+  - name: fact_order_status_transitions
+    description: >
+      Order status transition fact. Grain: one row per
+      order_status_history row, i.e. one row per status transition
+      (including each order's genesis row: previous_status null,
+      current_status = 'PENDING'). duration_in_previous_status_seconds
+      is a lag() over each order's own history (falling back to
+      stg_orders.created_at for the genesis row, so it's never null).
+      Table-materialized, same BI-access reasoning as
+      int_order_items_enriched.
+    columns:
+      - name: history_id
+        tests:
+          - not_null
+          - unique
+
+      - name: order_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_orders')
+                field: order_id
+
+      - name: current_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['PENDING', 'PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED', 'CANCELLED']
+
+      - name: previous_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['PENDING', 'PAID', 'PROCESSING', 'SHIPPED']

@@ -957,6 +957,61 @@ data "aws_iam_policy_document" "dbt_gold" {
 
   statement {
 
+    sid = "GlueCatalogWriteSilverStgOrderStatusHistory"
+
+    effect = "Allow"
+
+    actions = [
+      # Same DDL set as GlueCatalogWriteGold, scoped to exactly the
+      # one Silver table dbt now needs to create/replace here --
+      # stg_order_status_history (view). The other 7 stg_* models
+      # pre-date this IAM user and never needed write access; this
+      # grant is deliberately narrower than the rest of
+      # GlueCatalogReadSilver's mdp_silver_dev-wide read scope, not
+      # widened to match it -- add the same per-table grant for any
+      # future new stg_* when it actually needs one, not ahead of
+      # time.
+      "glue:CreateTable",
+      "glue:UpdateTable",
+      "glue:DeleteTable",
+      # GetTableVersions: found live, missing -- dbt-athena's view
+      # create-or-replace path checks table version history before
+      # replacing. Never needed by GlueCatalogWriteGold above because
+      # every existing Gold model is table-materialized, not view; this
+      # is the first view ever created through this IAM user.
+      "glue:GetTableVersions"
+    ]
+
+    resources = [
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:catalog",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:database/${module.glue_silver.database_name}",
+      "arn:aws:glue:${var.aws_region}:${var.account_id}:table/${module.glue_silver.database_name}/stg_order_status_history"
+    ]
+  }
+
+  statement {
+
+    sid = "S3WriteSilverStgOrderStatusHistory"
+
+    effect = "Allow"
+
+    actions = [
+      "s3:PutObject",
+      "s3:DeleteObject"
+    ]
+
+    # stg_ models are `view`-materialized (dbt_project.yml default),
+    # not physical tables -- Athena views have no S3 data location of
+    # their own, so this may turn out unnecessary. Included now as a
+    # precaution rather than a confirmed need; safe to drop later once
+    # a real `dbt run` confirms it's never actually used.
+    resources = [
+      "${module.datalake.bucket_arn}/silver/stg_order_status_history/*"
+    ]
+  }
+
+  statement {
+
     sid = "GlueCatalogWriteGold"
 
     effect = "Allow"

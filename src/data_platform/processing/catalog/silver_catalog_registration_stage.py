@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from data_platform.catalog import CatalogColumn, CatalogProvider, CatalogTable
+from data_platform.catalog.exceptions import TableAlreadyExistsError
 from data_platform.processing.context_writers.catalog_context_writer import (
     CatalogContextWriter,
 )
@@ -134,7 +135,18 @@ class SilverCatalogRegistrationStage(Stage):
             self.resolve_provider(self.catalog_provider_name),
         )
 
-        catalog_provider.create_table(table)
+        try:
+            catalog_provider.create_table(table)
+        except TableAlreadyExistsError:
+            # Idempotent re-registration: this stage's own docstring
+            # already promises "re-running create_table for an
+            # unchanged schema is harmless" (see
+            # run_silver_catalog_registration_once.py's ENTITIES
+            # comment) -- an already-registered table is a no-op here,
+            # not a failure. Does not compare/update the existing
+            # table's schema against this run's; a real schema change
+            # needs update_table, not this stage.
+            pass
 
         CatalogContextWriter.write_table(table, context)
 
