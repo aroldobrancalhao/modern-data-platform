@@ -1303,7 +1303,23 @@ services:
       resources:
         limits:
           cpus: "0.5"
-          memory: 256M
+          # Raised 256M -> 384M, 2026-09-19. The 256M figure (see this
+          # file's "Observability stack" header comment above the
+          # pushgateway block) was sized before Pipeline Health existed
+          # -- "no dashboards yet" at the time. With a real 7-panel
+          # dashboard now provisioned, docker stats showed this
+          # container idling at ~193MiB/256MiB (75%) with nothing even
+          # rendering it; a headless-browser full-dashboard screenshot
+          # capture pushed it over the edge and the kernel killed it --
+          # confirmed via dmesg, not inferred: "Memory cgroup out of
+          # memory: Killed process ... (grafana) ... anon-rss:245072kB",
+          # constraint=CONSTRAINT_MEMCG. That's the container's own
+          # cgroup limit, not host memory pressure -- free -h showed
+          # 2-3GiB available on the host the whole time. 384M keeps the
+          # same conservative-baseline philosophy as the header comment
+          # above, just re-sized for what this service actually renders
+          # now instead of its pre-dashboard footprint.
+          memory: 384M
     networks:
       - mdp-network
 
