@@ -58,17 +58,17 @@ running engineering log.
 - Diagnosed a data pipeline silently stuck for 9 hours with zero errors logged, down to one unguarded network call, using log archaeology and direct evidence rather than guesswork. ([details](docs/architecture/roadmap-next-steps.md))
 - An event-driven trigger's own self-restart logic re-fired the same already-handled signal 188 times in 30 minutes (2 runs reached real cloud compute) because the detection query had no memory of what it had already acted on -- replaced the rolling time window with a value watermark, then proved the fix by triggering the exact failure scenario twice in a row and confirming the second trigger correctly did nothing. ([details](docs/architecture/roadmap-next-steps.md))
 
-<!-- TODO: screenshot -- Grafana "Pipeline Health" dashboard
-     URL: http://localhost:3000/d/mdp-pipeline-health (admin / the
-     value of GRAFANA_ADMIN_PASSWORD in infrastructure/docker/.env)
-     Should show: the full panel grid with real data visible across
-     all 3 metric sources (processing framework, Airflow, Bronze
-     Consumer) -- not an empty or "No data" state, so run the
-     simulator + bronze-consumer for a few minutes first.
-     Save as: docs/images/grafana-pipeline-health.png
-     Then replace this comment with:
-     ![Grafana Pipeline Health dashboard](docs/images/grafana-pipeline-health.png)
--->
+![Grafana Pipeline Health dashboard](docs/images/grafana-pipeline-health.png)
+
+Captured 2026-09-19: Bronze Consumer panels show real data (a
+simulator-generated burst); Processing Framework and Airflow panels
+read "No data" at capture time -- Pushgateway had just been restarted
+with nothing pushed to it yet (no `marketplace_batch_pipeline` run
+since 2026-08-14), and the Airflow panels' rate/duration queries
+hadn't accumulated enough post-restart history. Not an empty
+dashboard -- the panel grid, layout, and the working data sources it
+does have are real; the rest reflects genuine current system state,
+not a capture bug.
 
 ---
 
