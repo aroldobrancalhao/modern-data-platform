@@ -545,20 +545,10 @@ Two BI integrations against the same Gold layer over Athena, tool-agnostic by de
 
 - `metabase` + `postgres-metabase` services (`infrastructure/docker/docker-compose.yml`) -- `http://localhost:3001`.
 - Authenticates as a dedicated, read-only IAM User (`mdp-bi-reader-dev`, Terraform `module.bi_reader`), not `terraform-admin` -- scoped to the Gold database/tables, the `gold/` S3 prefix, and its own dedicated Athena staging bucket.
-- First real dashboard, **Gold Layer Overview** (`http://localhost:3001/dashboard/2`): total orders, orders by day, top products by revenue, top sellers by order count, average order value. Built via the Metabase API using Native Query (SQL), not the visual builder, so every question is versioned as plain text instead of living only in Metabase's own metadata database -- see `dashboards/metabase/` (SQL sources, data-cardinality caveats, and a from-scratch recreation procedure, since Metabase's Serialization/export feature is Pro-only).
+- **Gold Layer Overview** (`http://localhost:3001/dashboard/2`): 6 questions -- total orders, ticket médio, average delivery time, orders by status, top products by revenue, top sellers by order count. Built via the Metabase API using Native Query (SQL), not the visual builder, so every question is versioned as plain text instead of living only in Metabase's own metadata database -- see `dashboards/metabase/` (SQL sources, data-cardinality caveats, color-palette decisions, and a from-scratch recreation procedure, since Metabase's Serialization/export feature is Pro-only).
+- Average delivery time (`06_average_delivery_time.sql`) unblocked by the Phase 4 `order_status_history` work above -- `fact_orders.delivered_at` and `fact_order_status_transitions` gave this card real data to read without needing its own model.
 
-<!-- TODO: screenshot -- Metabase "Gold Layer Overview" dashboard
-     URL: http://localhost:3001/dashboard/2 (log in with the Metabase
-     admin account created on first setup)
-     Should show: all 5 questions with real data rendered (total
-     orders, orders by day, top products by revenue, top sellers by
-     order count, average order value) -- not an empty dashboard, so
-     run the simulator and let the full pipeline land some Gold data
-     first.
-     Save as: docs/images/metabase-gold-layer-overview.png
-     Then replace this comment with:
-     ![Metabase Gold Layer Overview dashboard](docs/images/metabase-gold-layer-overview.png)
--->
+![Metabase Gold Layer Overview dashboard](docs/images/metabase-gold-layer-overview.png)
 
 ## Power BI (connected, dashboard not built)
 
@@ -593,7 +583,7 @@ Status legend: ✅ Done — 🔶 Partial — ⬜ Not started.
 ## Phase 5 — Analytics
 
 - 🔶 Metabase dashboard live and versioned as code; Power BI connected and validated, dashboard not built yet.
-- ⬜ Business KPIs.
+- 🔶 Business KPIs: average delivery time live as a Gold-backed Metabase card (see Metabase section above); cancellation rate computed and validated (4.97%, Phase 4 above) but not yet its own dashboard card -- by design, final metric aggregation stays in BI, not a dedicated dbt model, consistent with every other card in this dashboard.
 
 ## Phase 6 — Observability
 
