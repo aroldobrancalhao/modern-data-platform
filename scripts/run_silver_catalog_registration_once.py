@@ -22,9 +22,11 @@ License: MIT
 from __future__ import annotations
 
 import asyncio
+import os
 
 from data_platform.bootstrap import bootstrap
 from data_platform.config.settings import Settings
+from data_platform.observability.metrics_settings import MetricsSettings
 from data_platform.processing.catalog.silver_catalog_registration_stage import (
     SilverCatalogRegistrationStage,
 )
@@ -49,6 +51,20 @@ from data_platform.processing.metrics.prometheus_metrics_hook import (
 )
 from data_platform.processing.tracing.tracing_hook import TracingHook
 from data_platform.providers.provider_factory import ProviderFactory
+
+# MetricsSettings' own default ("http://pushgateway:9091") is the
+# Docker-network hostname -- correct for in-container callers, but
+# this script runs from the host (see module docstring's "Run with"),
+# where that hostname doesn't resolve. Same host-vs-container split
+# already solved for Kafka (KAFKA_BOOTSTRAP_SERVER); overriding here,
+# not in MetricsSettings' own default, keeps every in-container caller
+# of that class unaffected. PROMETHEUS_PUSHGATEWAY_URL still wins if
+# set (e.g. a future containerized run of this same script) --
+# "localhost:9091" is only the fallback for the common host case,
+# matching pushgateway's docker-compose port mapping (9091:9091).
+_HOST_PUSHGATEWAY_URL = os.environ.get(
+    "PROMETHEUS_PUSHGATEWAY_URL", "http://localhost:9091"
+)
 
 DATABASE = "mdp_silver_dev"
 
@@ -126,7 +142,10 @@ async def main() -> None:
     for entity in ENTITIES:
         await _register_one(entity, provider_factory, metrics_hook)
 
-    metrics_hook.push(job="silver_catalog_registration_once")
+    metrics_hook.push(
+        job="silver_catalog_registration_once",
+        settings=MetricsSettings(pushgateway_url=_HOST_PUSHGATEWAY_URL),
+    )
 
 
 if __name__ == "__main__":
