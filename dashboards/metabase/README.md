@@ -28,15 +28,26 @@ artifact of them, not the other way around.
 | 3 | `03_top_products_by_revenue.sql` | Top Produtos por Receita | 42 | row (horizontal bar) |
 | 4 | `04_top_sellers_by_orders.sql` | Top Vendedores por Nº de Pedidos | 43 | row (horizontal bar) |
 | 5 | `05_average_order_value.sql` | Ticket Médio | 44 | scalar |
+| 6 | `06_average_delivery_time.sql` | Tempo Médio de Entrega | 45 | scalar |
+
+**2026-09-19 revision**: added "Tempo Médio de Entrega" (card 45), the
+delivery-time card that had been pending since the Fase 4
+(`order_status_history`) work -- unblocked once `fact_orders.
+delivered_at` had real data underneath it, not before. See
+`06_average_delivery_time.sql`'s own header for the query and its
+real-number caveat (the ~17min average is a simulator-timing artifact,
+not a logistics SLA).
 
 **2026-08-13 revision**: replaced "Pedidos por Dia" (card 41) with
 "Pedidos por Status" -- see `02_orders_by_status.sql`'s own header for
 why, and the "Color palette" section below for the new per-card
-colors applied across all 5 cards. Original file kept in git history,
-not just discarded (`git log -- dashboards/metabase/02_orders_by_day.sql`).
+colors applied across all 5 cards (at the time). Original file kept in
+git history, not just discarded (`git log --
+dashboards/metabase/02_orders_by_day.sql`).
 
-Layout: the two scalars side by side on top, "Pedidos por Status"
-full-width below them, the two `row` charts side by side (2 columns)
+Layout: the three scalars side by side on top (8 grid units each, of
+24), "Pedidos por Status" full-width below them, the two `row` charts
+side by side (2 columns)
 at the bottom.
 
 ## Data caveats (checked before building, not assumed)
@@ -93,6 +104,17 @@ whether it was worth building:
   attempts that day failed, all traced to unrelated test scaffolding
   for the `mdp-pipeline-stale` alert, not a real pipeline bug). Not a
   Metabase-side cache or filter issue — re-run the DAG to refresh.
+- **"Tempo Médio de Entrega" (card 45) is a real, reproducible number
+  against the actual data, but not a realistic logistics figure** —
+  checked live 2026-09-19: 131,069 delivered orders, avg 0.28h
+  (~17min), min 0.18h, max 68.31h. `OrderStatusService`
+  (`src/simulator`) progresses orders through PENDING → ... →
+  DELIVERED on its own organic trickle cadence (capped at 15
+  orders/status/tick), not real-world shipping time, so this number
+  reflects simulator pacing, not an actual delivery SLA. Kept anyway,
+  same reasoning as the other caveats on this list: the figure is real
+  and worth showing, just needs the context that it isn't what it
+  would mean on a real marketplace.
 
 ## Why `int_order_items_enriched` is `materialized='table'`
 
@@ -204,6 +226,22 @@ card of that family:
 |---|---|---|---|
 | Volume (counts) | blue (categorical slot 1) | `#2a78d6` | Total de Pedidos (40), Top Vendedores por Nº de Pedidos (43) |
 | Financial (R$) | orange (categorical slot 2) | `#eb6834` | Top Produtos por Receita (42), Ticket Médio (44) |
+
+**Correction, 2026-09-19**: the table above documents the *intended*
+family grouping, not a literally rendered color for every card in it —
+re-verified live via the API while adding card 45 (`GET
+/api/card/40`, `/44`, and every `dashcard.visualization_settings` on
+the dashboard): the two scalars (40, 44) carry **no** `series_settings`
+or any other color key, only `column_settings` for number formatting
+(currency/decimal, column titles). Metabase's per-card
+`series_settings.<value>.color` override is a real, working mechanism
+for the bar/row charts (41, 42, 43) — confirmed there — but scalar
+cards in this edition don't expose an equivalent single-value color
+affordance to apply it to. "Tempo Médio de Entrega" (card 45) follows
+this same, now-confirmed precedent: conceptually closer to the volume
+family (it isn't a currency figure) but rendered with no color
+setting, consistent with how 40 and 44 already actually behave, not
+with what this table implied about them.
 
 Blue/orange are slots 1 and 2 of the skill's documented 8-hue
 categorical order — already validated as an adjacent pair (CVD ΔE 9.1
