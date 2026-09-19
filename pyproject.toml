@@ -99,6 +99,13 @@ dev = [
 testpaths = [
     "tests",
 ]
+# scripts/ isn't part of the installed package (excluded from
+# [tool.hatch.build.targets.wheel], deliberately -- these are one-off
+# scripts, not a library) so it's not importable under pytest the way
+# src/'s packages are (editable-installed via `uv sync`). Needed once
+# tests/unit/scripts/ started importing from it directly instead of
+# duplicating its logic.
+pythonpath = ["."]
 markers = [
     "real_aws: requires valid AWS credentials and network access",
     "real_databricks: requires valid Databricks credentials and network access",

@@ -115,10 +115,21 @@ async def _register_one(
     result = await executor.execute(pipeline, context)
 
     if result.status != ExecutionStatus.COMPLETED:
-        stage_result = result.stage_results[0]
+        # Not a stage_results[0] guard -- that index was the actual
+        # bug. BaseExecutor.execute() already puts error_type/
+        # error_message on the PipelineResult itself, correctly, in
+        # both failure shapes: a *raised* exception (caught by
+        # execute()'s own try/except, stage_results left empty --
+        # stage_results[0] was an IndexError here, not a rare edge
+        # case, since this pipeline has exactly one stage and any
+        # exception it raises never gets appended) and a *soft*
+        # StageResult(succeeded=False) (stage_results has an entry,
+        # mirrored onto the top level from its own last stage). Read
+        # the field that's always populated instead of re-deriving it
+        # from a collection that sometimes isn't.
         raise SystemExit(
             f"Registration failed for '{entity}': "
-            f"{stage_result.error_type} - {stage_result.error_message}"
+            f"{result.error_type} - {result.error_message}"
         )
 
     print(
