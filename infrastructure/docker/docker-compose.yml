@@ -1202,6 +1202,16 @@ services:
     networks:
       - mdp-network
 
+  # NOT non-essential despite living in the observability block above:
+  # order_status_history_lag_watcher (Airflow DAG) hard-depends on this
+  # being reachable -- its HttpSensor polls Prometheus's PromQL API
+  # directly to detect new order_status_history writes and trigger
+  # marketplace_batch_pipeline. Stopped for memory pressure on
+  # 2026-08-14/15, which silently broke that watcher's self-triggering
+  # chain for over a month (every run failed on DNS resolution against
+  # `prometheus`, found during the 2026-09-19 audit) -- never treat
+  # this as safe to stop opportunistically the way Grafana/Metabase/
+  # Kafka-UI are.
   prometheus:
     image: prom/prometheus:v3.13.2
     container_name: mdp-prometheus
