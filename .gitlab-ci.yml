@@ -1,0 +1,56 @@
+# GitLab CI pipeline for lint and unit tests.
+#
+# Functional scope mirrors .github/workflows/ci.yml (same two checks),
+# written in GitLab's native syntax for comparison/study purposes.
+
+# `ghcr.io/astral-sh/uv` is uv's own officially published image: it
+# bundles a specific uv version on top of an official Python base image,
+# so there is no separate "install uv" step like on GitHub Actions.
+image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+# Stages run in order; jobs within a stage run in parallel. Only two
+# stages are needed here: lint runs first (fails fast, cheaper than
+# testing), then test.
+stages:
+  - lint
+  - test
+
+variables:
+  # Point uv's cache at a path inside the project directory so GitLab's
+  # cache mechanism (which only knows how to save/restore paths under
+  # the job's working directory) can persist it between pipeline runs.
+  UV_CACHE_DIR: "${CI_PROJECT_DIR}/.uv-cache"
+
+# Shared cache config, reused by both jobs below via `!reference`.
+# Keyed on uv.lock so the cache is invalidated automatically whenever
+# dependencies change.
+.uv_cache: &uv_cache
+  key:
+    files:
+      - uv.lock
+  paths:
+    - .uv-cache
+
+lint:
+  stage: lint
+  cache:
+    <<: *uv_cache
+  script:
+    # `--frozen` fails instead of silently updating uv.lock if it's out
+    # of sync with pyproject.toml -- CI should never mutate the lockfile.
+    - uv sync --frozen
+    - uv run ruff check .
+
+test:
+  stage: test
+  cache:
+    <<: *uv_cache
+  script:
+    # `streaming` extra is required for tests/unit's confluent-kafka
+    # imports; `orchestration`/`warehouse` (Airflow/dbt) aren't imported
+    # by tests/unit, so they're left out to keep the install lean.
+    - uv sync --frozen --extra streaming
+    # tests/integration/ requires live infra (Postgres/Kafka/Airflow)
+    # and has at least one test with no skip-if-unreachable guard for
+    # that infra, so only tests/unit/ is safe to run here.
+    - uv run pytest tests/unit
