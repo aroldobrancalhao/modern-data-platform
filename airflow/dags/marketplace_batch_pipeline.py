@@ -64,7 +64,6 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from airflow.decorators import dag, task
 from airflow.providers.databricks.operators.databricks import (
