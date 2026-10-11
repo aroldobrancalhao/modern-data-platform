@@ -279,6 +279,19 @@ would need to be replaced outright, not reconfigured. Accepted
 consciously for now -- only the ARN/account/region value is kept
 out of tracked files, not the provider coupling itself.
 
+**Update, 2026-10-11: the handler is selected by configuration, not
+code.** With `logging_config_class` empty (`airflow/config/airflow.cfg`),
+Airflow's default logging config picks the remote task handler from
+the `REMOTE_BASE_LOG_FOLDER` scheme (`cloudwatch://`, `s3://`, `gs://`,
+`wasb...`), per Airflow's documentation -- still to be verified
+against 3.3. No repo code references `CloudwatchTaskHandler`, so
+switching backends is configuration + provider package + Connection.
+The `AIRFLOW__LOGGING__REMOTE_*` values now come from env vars whose
+defaults reproduce the CloudWatch setup above. The real code-level
+coupling was `watchtower` in
+`data_platform/observability/logging_config.py`, now isolated behind
+`LOG_SINK` and imported only when the CloudWatch sink is selected.
+
 Separately, `AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN` is a value typed by
 hand into `infrastructure/docker/.env`, even though Terraform already
 computes this exact ARN (`module.cloudwatch_airflow.arn`,
