@@ -151,9 +151,13 @@ x-airflow-common:
     # above) in parallel with the local files under
     # /opt/airflow/logs (AIRFLOW__LOGGING__DELETE_LOCAL_LOGS left at
     # its default False, so nothing local is deleted).
-    AIRFLOW__LOGGING__REMOTE_LOGGING: 'True'
-    AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: 'aws_default'
-    AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: 'cloudwatch://${AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN}'
+    # Backend is configuration only: Airflow picks the remote task
+    # handler from REMOTE_BASE_LOG_FOLDER's scheme. Defaults reproduce
+    # the CloudWatch setup above; override via infrastructure/docker/.env
+    # (see .env.example) to switch backend without editing this file.
+    AIRFLOW__LOGGING__REMOTE_LOGGING: '${AIRFLOW_REMOTE_LOGGING:-True}'
+    AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: '${AIRFLOW_REMOTE_LOG_CONN_ID:-aws_default}'
+    AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: '${AIRFLOW_REMOTE_BASE_LOG_FOLDER:-cloudwatch://${AIRFLOW_CLOUDWATCH_LOG_GROUP_ARN}}'
 
     # Sprint 13 close-out: a second, separate CloudWatch destination
     # from the AIRFLOW__LOGGING__REMOTE_* block above -- that one is
