@@ -320,6 +320,23 @@ Power BI
 
 ---
 
+# Ingestion Modes and Messaging
+
+What triggers a run (schedule, event, continuous flow) is separate from how much data a run processes (batch, micro-batch, record). The platform must support three ingestion modes and two messaging capabilities -- see [ADR-014](docs/architecture/ADR-014-messaging-capabilities-event-stream-work-queue-and-ingestion-modes.md).
+
+| Ingestion mode | Trigger | Status today |
+|----------------|---------|--------------|
+| Scheduled | Airflow schedule | Supported. `marketplace_batch_pipeline` runs with `schedule=None` (its 30-min schedule was reverted for cost) and is triggered manually or by the watcher below; `bronze_streaming_maintenance` runs daily |
+| Event-driven | A discrete event (e.g. a file landing) | Planned (ADR-014). Only a metric-based workaround exists today: `order_status_history_lag_watcher` triggers the batch pipeline from a Prometheus metric |
+| Continuous streaming | CDC change flow | Implemented: Debezium → Kafka → Bronze Consumer |
+
+| Messaging capability | Semantics | Providers |
+|----------------------|-----------|-----------|
+| Event stream | Log: offsets, replay, consumer groups | Kafka (implemented, the only messaging provider today). Event Hubs / Redpanda via the Kafka API: not validated |
+| Work queue | Per-message ack, retry, dead-letter | Planned: NATS JetStream (first provider), RabbitMQ or Pub/Sub (second provider) |
+
+---
+
 # Cloud Strategy
 
 The platform follows a capability-based architecture.
@@ -333,6 +350,8 @@ Business logic never depends directly on cloud providers.
 | Messaging | Kafka / MSK | Event Hubs | Pub/Sub |
 | Monitoring | CloudWatch | Azure Monitor | Cloud Monitoring |
 | Secrets | Secrets Manager | Key Vault | Secret Manager |
+
+Messaging targets above are design targets: only Kafka is implemented today (see [Ingestion Modes and Messaging](#ingestion-modes-and-messaging)).
 
 Provider-specific implementations are isolated behind platform contracts.
 
@@ -534,6 +553,7 @@ Current ADRs:
 - ADR-011 – Gold Modeling Moves to dbt
 - ADR-012 – Agent Layer as a Separate, Connected Project
 - ADR-013 – `src/` Module Structure, Reconciled With Reality
+- ADR-014 – Messaging Capabilities: Event Stream, Work Queue and Ingestion Modes
 
 ---
 
