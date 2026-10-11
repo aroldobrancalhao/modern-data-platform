@@ -19,6 +19,8 @@ License: MIT
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from data_platform.observability import logging_config
@@ -36,6 +38,7 @@ def _reset_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(logging_config, "_cloudwatch_broken", False)
     monkeypatch.delenv(logging_config._CLOUDWATCH_ENABLED_ENV, raising=False)
     monkeypatch.delenv(logging_config._CLOUDWATCH_LOG_GROUP_ENV, raising=False)
+    monkeypatch.delenv(logging_config._SINK_ENV, raising=False)
 
 
 def test_cloudwatch_disabled_by_default_does_not_touch_the_logger(
@@ -143,3 +146,93 @@ def test_configure_logging_still_configures_a_working_bound_logger() -> None:
 
     logger = structlog.get_logger()
     logger.info("smoke test", key="value")
+
+
+def test_sink_defaults_to_stdout_with_no_env_set() -> None:
+    assert logging_config._sink_from_env() == logging_config._SINK_STDOUT
+
+
+def test_legacy_cloudwatch_flag_selects_the_cloudwatch_sink_when_log_sink_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The exact env docker-compose.yml sets today (LOG_CLOUDWATCH_ENABLED
+    # only, no LOG_SINK) must keep shipping to CloudWatch.
+    monkeypatch.setenv(logging_config._CLOUDWATCH_ENABLED_ENV, "true")
+
+    assert logging_config._sink_from_env() == logging_config._SINK_CLOUDWATCH
+
+
+@pytest.mark.parametrize("value", ["cloudwatch", "CloudWatch", " cloudwatch "])
+def test_log_sink_cloudwatch_ships_without_the_legacy_flag(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv(logging_config._SINK_ENV, value)
+    shipped: list[str] = []
+
+    class _FakeLogger:
+        def info(self, event: str) -> None:
+            shipped.append(event)
+
+    monkeypatch.setattr(
+        logging_config, "_get_cloudwatch_logger", lambda: _FakeLogger()
+    )
+
+    assert logging_config._ship_to_cloudwatch(None, "info", "line") == "line"
+    assert shipped == ["line"]
+
+
+def test_log_sink_stdout_overrides_the_legacy_cloudwatch_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(logging_config._CLOUDWATCH_ENABLED_ENV, "true")
+    monkeypatch.setenv(logging_config._SINK_ENV, "stdout")
+
+    def _boom() -> None:
+        raise AssertionError("stdout sink must not reach CloudWatch")
+
+    monkeypatch.setattr(logging_config, "_get_cloudwatch_logger", _boom)
+
+    assert logging_config._ship_to_cloudwatch(None, "info", "line") == "line"
+
+
+def test_invalid_log_sink_falls_back_to_the_legacy_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(logging_config._SINK_ENV, "elasticsearch")
+
+    assert logging_config._sink_from_env() == logging_config._SINK_STDOUT
+
+    monkeypatch.setenv(logging_config._CLOUDWATCH_ENABLED_ENV, "true")
+
+    assert logging_config._sink_from_env() == logging_config._SINK_CLOUDWATCH
+
+
+def test_cloudwatch_logger_is_built_by_the_sink_module_with_the_configured_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from data_platform.observability import cloudwatch_sink
+
+    monkeypatch.setenv(logging_config._CLOUDWATCH_LOG_GROUP_ENV, "/mdp/test/platform")
+    handler_kwargs: list[dict[str, object]] = []
+
+    class _FakeHandler(logging.Handler):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__()
+            handler_kwargs.append(kwargs)
+
+    monkeypatch.setattr(
+        cloudwatch_sink.watchtower, "CloudWatchLogHandler", _FakeHandler
+    )
+    built = logging.getLogger("data_platform.observability.cloudwatch")
+    monkeypatch.setattr(built, "handlers", [])
+
+    logger = logging_config._get_cloudwatch_logger()
+
+    assert logger is built
+    assert logger.propagate is False
+    assert handler_kwargs == [
+        {"log_group_name": "/mdp/test/platform", "create_log_group": False}
+    ]
+    # Cached per process: a second call reuses it, no second handler.
+    assert logging_config._get_cloudwatch_logger() is logger
+    assert len(handler_kwargs) == 1

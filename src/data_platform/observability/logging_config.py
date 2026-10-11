@@ -26,6 +26,18 @@ _DEFAULT_LEVEL = "INFO"
 # Docker, or tests) -- console output via PrintLoggerFactory below is
 # untouched either way, this is a second destination, not a
 # replacement.
+#
+# LOG_SINK picks the destination: "stdout" (console only, the default)
+# or "cloudwatch" (console + CloudWatch, see cloudwatch_sink.py -- the
+# only module that imports watchtower). When LOG_SINK is unset or
+# invalid, the older LOG_CLOUDWATCH_ENABLED flag still decides, so
+# every existing deployment (docker-compose.yml sets only that flag)
+# behaves exactly as before.
+_SINK_ENV = "LOG_SINK"
+_SINK_STDOUT = "stdout"
+_SINK_CLOUDWATCH = "cloudwatch"
+_SINKS = {_SINK_STDOUT, _SINK_CLOUDWATCH}
+
 _CLOUDWATCH_ENABLED_ENV = "LOG_CLOUDWATCH_ENABLED"
 _CLOUDWATCH_LOG_GROUP_ENV = "LOG_CLOUDWATCH_LOG_GROUP"
 
@@ -51,52 +63,43 @@ def _cloudwatch_enabled() -> bool:
     }
 
 
+def _sink_from_env() -> str:
+    """
+    Resolves the log sink: a valid LOG_SINK wins; otherwise the legacy
+    LOG_CLOUDWATCH_ENABLED flag selects "cloudwatch", else "stdout".
+    """
+    value = os.environ.get(_SINK_ENV, "").strip().lower()
+
+    if value in _SINKS:
+        return value
+
+    return _SINK_CLOUDWATCH if _cloudwatch_enabled() else _SINK_STDOUT
+
+
 def _get_cloudwatch_logger() -> logging.Logger:
     """
-    Lazily creates (once per process) the stdlib logger wired to
-    watchtower.CloudWatchLogHandler that ships to the platform log
-    group (module.cloudwatch_platform, monitoring.tf). Kept entirely
-    separate from structlog's own PrintLoggerFactory pipeline -- this
-    logger is never used for console output, only as a shipping
-    target the CloudWatch processor below writes the already-rendered
-    JSON line into.
+    Lazily creates (once per process) the CloudWatch shipping logger
+    (cloudwatch_sink.build_cloudwatch_logger). cloudwatch_sink -- and
+    with it watchtower -- is imported here, only once the "cloudwatch"
+    sink is actually in use.
     """
     global _cloudwatch_logger
 
     if _cloudwatch_logger is not None:
         return _cloudwatch_logger
 
-    import watchtower
-
     log_group = os.environ.get(_CLOUDWATCH_LOG_GROUP_ENV, "").strip()
 
     if not log_group:
         raise RuntimeError(
-            f"{_CLOUDWATCH_ENABLED_ENV} is set but {_CLOUDWATCH_LOG_GROUP_ENV} is empty"
+            f"CloudWatch log sink selected but {_CLOUDWATCH_LOG_GROUP_ENV} is empty"
         )
 
-    logger = logging.getLogger("data_platform.observability.cloudwatch")
-    logger.setLevel(logging.DEBUG)
-    # Never hand these records to the root logger too -- this logger
-    # exists solely to drive the CloudWatch handler, nothing else
-    # should print them a second time.
-    logger.propagate = False
-    logger.addHandler(
-        watchtower.CloudWatchLogHandler(
-            log_group_name=log_group,
-            # Default log_stream_name template (hostname/program/pid)
-            # is what's wanted here: multiple entry points (bronze-
-            # consumer, the one-off scripts, the Airflow bootstrap
-            # script, DAG tasks) can ship to the same log group
-            # without clobbering each other's streams, with no
-            # per-caller configuration needed.
-            create_log_group=False,
-        )
-    )
+    from data_platform.observability.cloudwatch_sink import build_cloudwatch_logger
 
-    _cloudwatch_logger = logger
+    _cloudwatch_logger = build_cloudwatch_logger(log_group)
 
-    return logger
+    return _cloudwatch_logger
 
 
 def _ship_to_cloudwatch(logger: object, method_name: str, event: str) -> str:
@@ -116,7 +119,7 @@ def _ship_to_cloudwatch(logger: object, method_name: str, event: str) -> str:
     """
     global _cloudwatch_broken
 
-    if not _cloudwatch_enabled() or _cloudwatch_broken:
+    if _sink_from_env() != _SINK_CLOUDWATCH or _cloudwatch_broken:
         return event
 
     try:
