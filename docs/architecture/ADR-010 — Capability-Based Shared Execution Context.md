@@ -1320,6 +1320,11 @@ MessagingKeys.OFFSET
 
 The runtime does not know whether events originate from Kafka or Pub/Sub.
 
+> **See ADR-014**: `PARTITION` and `OFFSET` are event-stream (log)
+> concepts; work-queue providers such as Pub/Sub or NATS JetStream
+> identify a message by id instead. ADR-014 defines which keys each
+> messaging capability publishes.
+
 ---
 
 # Kafka

@@ -181,6 +181,12 @@ Possible implementations:
 - Azure Event Hubs
 - Google Pub/Sub
 
+> **See ADR-014**: the single contract above (`publish`/`subscribe`/
+> `ack`/`retry`/`dead_letter`) mixes work-queue operations with an
+> event-stream provider, and was never reconciled with ADR-0008 or
+> with the real `MessagingProvider`. ADR-014 reconciles it with the
+> event-stream and work-queue semantics the platform must support.
+
 ---
 
 # Catalog Contract

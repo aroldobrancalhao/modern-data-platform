@@ -71,6 +71,10 @@ Responsibilities:
 
 Kafka is not used as an orchestration engine for batch workloads.
 
+> **See ADR-014**: Retry Topics and DLQ listed above are not part of
+> the real `MessagingProvider` contract (ADR-002 expected them there;
+> this ADR placed them in the consumer). ADR-014 reconciles both.
+
 ---
 
 # Business Services
@@ -205,6 +209,9 @@ Possible strategies:
 - Dead Letter Queue
 - Idempotent processing
 
+> **See ADR-014**: retry and dead-letter semantics for event-driven
+> (work-queue) ingestion are defined there, not by Kafka consumers.
+
 ---
 
 # Why Airflow is not waiting for Kafka events
@@ -290,6 +297,10 @@ However, Event-Driven Processing is restricted to Streaming.
 Batch remains DAG-oriented.
 
 This separation reflects common enterprise architectures.
+
+> **See ADR-014**: event-driven processing is no longer restricted to
+> streaming. ADR-014 adds a third ingestion mode (an event, such as a
+> file landing, triggering a batch) alongside the two modes above.
 
 ---
 
